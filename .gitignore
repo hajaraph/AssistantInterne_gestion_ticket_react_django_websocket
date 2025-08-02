@@ -1,0 +1,9 @@
+.idea
+Tech/db.sqlite3
+Tech/__pycache__
+Tech/Techinicien/__pycache__
+Tech/Technicien/migrations/__pycache__
+app/node_modules
+Tech/.venv
+Tech/.idea
+Tech/.env
