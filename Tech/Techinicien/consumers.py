@@ -9,6 +9,76 @@ from .serializers import CommentaireSerializer
 
 User = get_user_model()
 
+class NotificationConsumer(AsyncWebsocketConsumer):
+    """Consumer pour les notifications globales (nouveaux tickets, assignations, etc.)"""
+
+    async def connect(self):
+        # Vérifier l'authentification via le token JWT
+        token = self.scope['query_string'].decode().split('token=')[-1]
+        self.user = await self.get_user_from_token(token)
+
+        if self.user is None:
+            await self.close()
+            return
+
+        # Vérifier que l'utilisateur est un technicien ou admin
+        if self.user.role not in ['technicien', 'admin']:
+            await self.close()
+            return
+
+        # Rejoindre le groupe des notifications pour techniciens
+        self.notification_group_name = 'technician_notifications'
+        await self.channel_layer.group_add(
+            self.notification_group_name,
+            self.channel_name
+        )
+
+        await self.accept()
+        print(f"Utilisateur {self.user.email} connecté aux notifications globales")
+
+    async def disconnect(self, close_code):
+        # Quitter le groupe des notifications
+        if hasattr(self, 'notification_group_name'):
+            await self.channel_layer.group_discard(
+                self.notification_group_name,
+                self.channel_name
+            )
+        print(f"Utilisateur déconnecté des notifications globales")
+
+    # Gestionnaires pour les différents types de notifications
+    async def new_ticket_notification(self, event):
+        """Envoyer une notification de nouveau ticket"""
+        await self.send(text_data=json.dumps({
+            'type': 'new_ticket',
+            'ticket': event['ticket']
+        }))
+
+    async def ticket_updated_notification(self, event):
+        """Envoyer une notification de ticket mis à jour"""
+        await self.send(text_data=json.dumps({
+            'type': 'ticket_updated',
+            'ticket': event['ticket']
+        }))
+
+    async def ticket_assigned_notification(self, event):
+        """Envoyer une notification d'assignation de ticket"""
+        await self.send(text_data=json.dumps({
+            'type': 'ticket_assigned',
+            'ticket': event['ticket']
+        }))
+
+    @database_sync_to_async
+    def get_user_from_token(self, token):
+        try:
+            # Valider le token JWT
+            UntypedToken(token)
+            access_token = AccessToken(token)
+            user_id = access_token['user_id']
+            return User.objects.get(id=user_id)
+        except (InvalidToken, TokenError, User.DoesNotExist):
+            return None
+
+
 class TicketConsumer(AsyncWebsocketConsumer):
     async def connect(self):
         self.ticket_id = self.scope['url_route']['kwargs']['ticket_id']

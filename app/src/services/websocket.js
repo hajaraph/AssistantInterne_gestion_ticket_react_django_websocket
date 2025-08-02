@@ -6,6 +6,11 @@ class WebSocketService {
     this.maxReconnectAttempts = 5;
     this.reconnectTimeout = null;
     this.isConnected = false; // Ajouter un flag de connexion interne
+
+    // Nouvelle propriété pour les notifications globales
+    this.globalSocket = null;
+    this.globalListeners = new Map();
+    this.isGlobalConnected = false;
   }
 
   connect(ticketId, token) {
@@ -140,6 +145,104 @@ class WebSocketService {
           callback(data);
         } catch (error) {
           console.error('Erreur dans le callback WebSocket:', error);
+        }
+      });
+    }
+  }
+
+  // Nouvelle méthode pour se connecter aux notifications globales
+  connectGlobal(token) {
+    if (this.globalSocket && this.globalSocket.readyState === WebSocket.OPEN) {
+      console.log('WebSocket global déjà connecté');
+      return;
+    }
+
+    const wsUrl = `ws://localhost:8000/ws/notifications/?token=${token}`;
+    console.log('Tentative de connexion WebSocket global vers:', wsUrl);
+
+    try {
+      this.globalSocket = new WebSocket(wsUrl);
+
+      this.globalSocket.onopen = (event) => {
+        console.log('WebSocket global connecté avec succès');
+        this.isGlobalConnected = true;
+        this.notifyGlobalListeners('open', event);
+      };
+
+      this.globalSocket.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          console.log('Notification globale reçue:', data);
+
+          if (data.type === 'new_ticket' && data.ticket) {
+            console.log('Traitement nouveau ticket:', data.ticket.id);
+            this.notifyGlobalListeners('new_ticket', data.ticket);
+          } else if (data.type === 'ticket_updated' && data.ticket) {
+            console.log('Traitement ticket mis à jour:', data.ticket.id);
+            this.notifyGlobalListeners('ticket_updated', data.ticket);
+          } else if (data.type === 'ticket_assigned' && data.ticket) {
+            console.log('Traitement ticket assigné:', data.ticket.id);
+            this.notifyGlobalListeners('ticket_assigned', data.ticket);
+          } else {
+            console.log('Message WebSocket global non reconnu:', data);
+          }
+        } catch (error) {
+          console.error('Erreur parsing message WebSocket global:', error);
+        }
+      };
+
+      this.globalSocket.onclose = (event) => {
+        console.log('WebSocket global fermé:', event.code, event.reason);
+        this.isGlobalConnected = false;
+        this.notifyGlobalListeners('close', event);
+      };
+
+      this.globalSocket.onerror = (error) => {
+        console.error('Erreur WebSocket global:', error);
+        this.isGlobalConnected = false;
+        this.notifyGlobalListeners('error', error);
+      };
+
+    } catch (error) {
+      console.error('Erreur lors de la création du WebSocket global:', error);
+    }
+  }
+
+  disconnectGlobal() {
+    if (this.globalSocket) {
+      this.globalSocket.close();
+      this.globalSocket = null;
+    }
+    this.isGlobalConnected = false;
+    this.globalListeners.clear();
+    console.log('WebSocket global déconnecté');
+  }
+
+  // Méthodes pour les listeners globaux
+  addGlobalEventListener(eventType, callback) {
+    if (!this.globalListeners.has(eventType)) {
+      this.globalListeners.set(eventType, []);
+    }
+    this.globalListeners.get(eventType).push(callback);
+  }
+
+  removeGlobalEventListener(eventType, callback) {
+    if (this.globalListeners.has(eventType)) {
+      const callbacks = this.globalListeners.get(eventType);
+      const index = callbacks.indexOf(callback);
+      if (index !== -1) {
+        callbacks.splice(index, 1);
+      }
+    }
+  }
+
+  notifyGlobalListeners(eventType, data) {
+    if (this.globalListeners.has(eventType)) {
+      this.globalListeners.get(eventType).forEach(callback => {
+        try {
+          callback(data);
+        } catch (error) {
+          console.error('Erreur dans le callback WebSocket global:', error);
         }
       });
     }

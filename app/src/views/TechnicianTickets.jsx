@@ -5,6 +5,7 @@ import TicketDetailsModal from "../components/modals/TicketDetailsModal.jsx";
 import StatusBadge from "../components/badges/StatusBadge.jsx";
 import PriorityBadge from "../components/badges/PriorityBadge.jsx";
 import apiService from '../services/api';
+import webSocketService from '../services/websocket';
 import { useAuth } from '../contexts/AuthContext';
 
 const TechnicianTickets = () => {
@@ -22,6 +23,98 @@ const TechnicianTickets = () => {
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
 
   const { user } = useAuth();
+
+  // Setup WebSocket pour les notifications en temps réel
+  useEffect(() => {
+    if (user) {
+      // Récupérer le token depuis le localStorage
+      const token = localStorage.getItem('access_token');
+
+      if (token) {
+        console.log('Tentative de connexion WebSocket global pour:', user.email);
+
+        // Se connecter aux notifications globales
+        webSocketService.connectGlobal(token);
+
+        // Gestionnaire pour les nouveaux tickets
+        const handleNewTicket = (newTicket) => {
+          console.log('Nouveau ticket reçu via WebSocket:', newTicket);
+          setTickets(prevTickets => {
+            // Vérifier si le ticket existe déjà
+            const ticketExists = prevTickets.some(ticket => ticket.id === newTicket.id);
+            if (ticketExists) {
+              // Mettre à jour le ticket existant
+              console.log('Mise à jour du ticket existant:', newTicket.id);
+              return prevTickets.map(ticket =>
+                ticket.id === newTicket.id ? newTicket : ticket
+              );
+            } else {
+              // Ajouter le nouveau ticket au début de la liste
+              console.log('Ajout du nouveau ticket:', newTicket.id);
+              return [newTicket, ...prevTickets];
+            }
+          });
+        };
+
+        // Gestionnaire pour les tickets mis à jour
+        const handleTicketUpdated = (updatedTicket) => {
+          console.log('Ticket mis à jour via WebSocket:', updatedTicket);
+          setTickets(prevTickets =>
+            prevTickets.map(ticket =>
+              ticket.id === updatedTicket.id ? updatedTicket : ticket
+            )
+          );
+        };
+
+        // Gestionnaire pour les assignations de tickets
+        const handleTicketAssigned = (assignedTicket) => {
+          console.log('Ticket assigné via WebSocket:', assignedTicket);
+          setTickets(prevTickets =>
+            prevTickets.map(ticket =>
+              ticket.id === assignedTicket.id ? assignedTicket : ticket
+            )
+          );
+        };
+
+        // Gestionnaire de connexion WebSocket
+        const handleWebSocketOpen = () => {
+          console.log('WebSocket global connecté avec succès');
+        };
+
+        const handleWebSocketError = (error) => {
+          console.error('Erreur WebSocket global:', error);
+        };
+
+        const handleWebSocketClose = () => {
+          console.log('WebSocket global fermé');
+        };
+
+        // Enregistrer les listeners
+        webSocketService.addGlobalEventListener('new_ticket', handleNewTicket);
+        webSocketService.addGlobalEventListener('ticket_updated', handleTicketUpdated);
+        webSocketService.addGlobalEventListener('ticket_assigned', handleTicketAssigned);
+        webSocketService.addGlobalEventListener('open', handleWebSocketOpen);
+        webSocketService.addGlobalEventListener('error', handleWebSocketError);
+        webSocketService.addGlobalEventListener('close', handleWebSocketClose);
+
+        // Cleanup lors du démontage
+        return () => {
+          console.log('Nettoyage des listeners WebSocket');
+          webSocketService.removeGlobalEventListener('new_ticket', handleNewTicket);
+          webSocketService.removeGlobalEventListener('ticket_updated', handleTicketUpdated);
+          webSocketService.removeGlobalEventListener('ticket_assigned', handleTicketAssigned);
+          webSocketService.removeGlobalEventListener('open', handleWebSocketOpen);
+          webSocketService.removeGlobalEventListener('error', handleWebSocketError);
+          webSocketService.removeGlobalEventListener('close', handleWebSocketClose);
+          webSocketService.disconnectGlobal();
+        };
+      } else {
+        console.log('Token manquant pour WebSocket');
+      }
+    } else {
+      console.log('Utilisateur manquant pour WebSocket');
+    }
+  }, [user]);
 
   // Fonction de chargement des tickets assignés ou disponibles
   const loadTickets = useCallback(async (isRefresh = false) => {

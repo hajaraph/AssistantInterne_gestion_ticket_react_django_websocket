@@ -1,0 +1,55 @@
+{
+  "hash": "a3f566ff",
+  "configHash": "003abce6",
+  "lockfileHash": "edfde7cf",
+  "browserHash": "dcb512fe",
+  "optimized": {
+    "react": {
+      "src": "../../node_modules/react/index.js",
+      "file": "react.js",
+      "fileHash": "cc459819",
+      "needsInterop": true
+    },
+    "react-dom/client": {
+      "src": "../../node_modules/react-dom/client.js",
+      "file": "react-dom_client.js",
+      "fileHash": "ca543242",
+      "needsInterop": true
+    },
+    "react-router-dom": {
+      "src": "../../node_modules/react-router-dom/dist/index.js",
+      "file": "react-router-dom.js",
+      "fileHash": "52a5f511",
+      "needsInterop": false
+    },
+    "recharts": {
+      "src": "../../node_modules/recharts/es6/index.js",
+      "file": "recharts.js",
+      "fileHash": "0380a5d2",
+      "needsInterop": false
+    },
+    "react-icons/fa": {
+      "src": "../../node_modules/react-icons/fa/index.mjs",
+      "file": "react-icons_fa.js",
+      "fileHash": "a37bd990",
+      "needsInterop": false
+    },
+    "react-icons/fa6": {
+      "src": "../../node_modules/react-icons/fa6/index.mjs",
+      "file": "react-icons_fa6.js",
+      "fileHash": "dc380589",
+      "needsInterop": false
+    }
+  },
+  "chunks": {
+    "chunk-JPFIJ2ZJ": {
+      "file": "chunk-JPFIJ2ZJ.js"
+    },
+    "chunk-HCW2M3BI": {
+      "file": "chunk-HCW2M3BI.js"
+    },
+    "chunk-3A6WRQ5K": {
+      "file": "chunk-3A6WRQ5K.js"
+    }
+  }
+}

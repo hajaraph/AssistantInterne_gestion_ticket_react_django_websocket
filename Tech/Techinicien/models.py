@@ -4,9 +4,12 @@ from django.db.models.signals import post_save
 from django.dispatch import receiver
 from django.utils.translation import gettext_lazy as _
 from django.conf import settings
+import logging
 
 # Use this for foreign key references to User
 User = settings.AUTH_USER_MODEL
+
+logger = logging.getLogger(__name__)
 
 
 class CustomUserManager(BaseUserManager):
@@ -306,6 +309,9 @@ def envoyer_email_creation_ticket(sender, instance, created, **kwargs):
             envoyer_email_confirmation_employe,
             auto_assign_urgent_ticket
         )
+        from .serializers import TicketListSerializer
+        from channels.layers import get_channel_layer
+        from asgiref.sync import async_to_sync
 
         # Vérifier et assigner automatiquement si c'est un ticket urgent/critique
         technicien_assigne = auto_assign_urgent_ticket(instance)
@@ -321,6 +327,42 @@ def envoyer_email_creation_ticket(sender, instance, created, **kwargs):
         except Exception as e:
             logger.error(f"Erreur lors de l'envoi des emails pour le ticket {instance.id}: {str(e)}")
 
+        # Envoyer notification WebSocket pour les nouveaux tickets
+        try:
+            channel_layer = get_channel_layer()
+            if channel_layer:
+                # Sérialiser le ticket pour l'envoi WebSocket
+                serializer = TicketListSerializer(instance)
+                ticket_data = serializer.data
+
+                # Envoyer la notification aux techniciens connectés
+                async_to_sync(channel_layer.group_send)(
+                    'technician_notifications',
+                    {
+                        'type': 'new_ticket_notification',
+                        'ticket': ticket_data
+                    }
+                )
+                logger.info(f"Notification WebSocket envoyée pour le nouveau ticket {instance.id}")
+        except Exception as e:
+            logger.error(f"Erreur lors de l'envoi de la notification WebSocket pour le ticket {instance.id}: {str(e)}")
+
         # Log pour les tickets urgents assignés automatiquement
         if technicien_assigne:
             logger.info(f"Ticket urgent #{instance.id} assigné automatiquement à {technicien_assigne.email}")
+
+            # Envoyer notification d'assignation WebSocket
+            try:
+                if channel_layer:
+                    serializer = TicketListSerializer(instance)
+                    ticket_data = serializer.data
+
+                    async_to_sync(channel_layer.group_send)(
+                        'technician_notifications',
+                        {
+                            'type': 'ticket_assigned_notification',
+                            'ticket': ticket_data
+                        }
+                    )
+            except Exception as e:
+                logger.error(f"Erreur lors de l'envoi de la notification d'assignation WebSocket: {str(e)}")
