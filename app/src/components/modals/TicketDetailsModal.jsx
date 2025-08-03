@@ -35,15 +35,20 @@ const TicketDetailsModal = ({ ticket, isOpen, onClose, onTicketUpdated }) => {
   // Charger les commentaires quand le ticket change
   useEffect(() => {
     if (ticket?.id) {
+      console.log('Connexion WebSocket pour le ticket:', ticket.id);
       loadComments();
 
       // Configuration WebSocket pour les commentaires en temps réel
       const token = localStorage.getItem('access_token');
       if (token) {
+        // Déconnecter d'abord toute connexion existante
+        webSocketService.disconnect();
+
+        // Se connecter au ticket correct
         webSocketService.connect(ticket.id, token);
 
         const handleNewComment = (comment) => {
-          console.log('Nouveau commentaire reçu dans le modal:', comment);
+          console.log('Nouveau commentaire reçu dans le modal pour ticket', ticket.id, ':', comment);
           setComments(prevComments => {
             const exists = prevComments.some(c => c.id === comment.id);
             if (!exists) {
@@ -54,7 +59,7 @@ const TicketDetailsModal = ({ ticket, isOpen, onClose, onTicketUpdated }) => {
         };
 
         const handleInstructionUpdated = (instruction) => {
-          console.log('Instruction mise à jour reçue:', instruction);
+          console.log('Instruction mise à jour reçue pour ticket', ticket.id, ':', instruction);
           setComments(prevComments => {
             return prevComments.map(comment =>
               comment.id === instruction.id ? instruction : comment
@@ -62,25 +67,38 @@ const TicketDetailsModal = ({ ticket, isOpen, onClose, onTicketUpdated }) => {
           });
         };
 
+        const handleTicketUpdated = (updatedTicketData) => {
+          console.log('Ticket mis à jour reçu via WebSocket pour ticket', ticket.id, ':', updatedTicketData);
+          // Mettre à jour les données du ticket dans le modal
+          Object.assign(ticket, updatedTicketData);
+          // Forcer le re-render du modal si nécessaire
+          if (onTicketUpdated) {
+            onTicketUpdated(updatedTicketData);
+          }
+        };
+
         const handleWebSocketError = (errorMessage) => {
-          console.log('Erreur WebSocket reçue:', errorMessage);
+          console.log('Erreur WebSocket reçue pour ticket', ticket.id, ':', errorMessage);
           alert(errorMessage);
         };
 
         webSocketService.addEventListener('comment', handleNewComment);
         webSocketService.addEventListener('instruction_updated', handleInstructionUpdated);
+        webSocketService.addEventListener('ticket_updated', handleTicketUpdated);
         webSocketService.addEventListener('error', handleWebSocketError);
 
         // Nettoyage lors du changement de ticket ou fermeture du modal
         return () => {
+          console.log('Nettoyage WebSocket pour ticket:', ticket.id);
           webSocketService.removeEventListener('comment', handleNewComment);
           webSocketService.removeEventListener('instruction_updated', handleInstructionUpdated);
+          webSocketService.removeEventListener('ticket_updated', handleTicketUpdated);
           webSocketService.removeEventListener('error', handleWebSocketError);
           webSocketService.disconnect();
         };
       }
     }
-  }, [ticket?.id]);
+  }, [ticket?.id, onTicketUpdated]); // Ajouter onTicketUpdated aux dépendances
 
   // Auto-scroll vers le dernier commentaire
   useEffect(() => {
@@ -312,7 +330,10 @@ const TicketDetailsModal = ({ ticket, isOpen, onClose, onTicketUpdated }) => {
 
   const canAccessChat = () => {
     if (user.role === 'employe') {
-      return ticket.utilisateur_createur?.id === user.id;
+      // L'employé ne peut accéder au chat que si :
+      // 1. C'est son ticket
+      // 2. Un technicien a pris en charge le ticket
+      return ticket.utilisateur_createur?.id === user.id && ticket.technicien_assigne;
     }
     if (user.role === 'technicien') {
       return ticket.technicien_assigne?.id === user.id;

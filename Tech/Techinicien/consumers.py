@@ -172,6 +172,16 @@ class TicketConsumer(AsyncWebsocketConsumer):
             'instruction': instruction
         }))
 
+    # Gestionnaire pour les mises à jour de tickets
+    async def ticket_updated(self, event):
+        ticket = event['ticket']
+
+        # Envoyer la mise à jour du ticket au WebSocket
+        await self.send(text_data=json.dumps({
+            'type': 'ticket_updated',
+            'ticket': ticket
+        }))
+
     @database_sync_to_async
     def get_user_from_token(self, token):
         try:

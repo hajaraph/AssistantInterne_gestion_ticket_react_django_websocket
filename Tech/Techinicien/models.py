@@ -366,3 +366,89 @@ def envoyer_email_creation_ticket(sender, instance, created, **kwargs):
                     )
             except Exception as e:
                 logger.error(f"Erreur lors de l'envoi de la notification d'assignation WebSocket: {str(e)}")
+
+    else:
+        # Ticket mis à jour (pas créé)
+        try:
+            from .serializers import TicketListSerializer
+            from channels.layers import get_channel_layer
+            from asgiref.sync import async_to_sync
+
+            channel_layer = get_channel_layer()
+            if channel_layer:
+                # Sérialiser le ticket mis à jour
+                serializer = TicketListSerializer(instance)
+                ticket_data = serializer.data
+
+                # Envoyer la notification de mise à jour aux techniciens
+                async_to_sync(channel_layer.group_send)(
+                    'technician_notifications',
+                    {
+                        'type': 'ticket_updated_notification',
+                        'ticket': ticket_data
+                    }
+                )
+
+                # Envoyer aussi aux utilisateurs connectés au ticket spécifique
+                async_to_sync(channel_layer.group_send)(
+                    f'ticket_{instance.id}',
+                    {
+                        'type': 'ticket_updated',
+                        'ticket': ticket_data
+                    }
+                )
+                logger.info(f"Notification WebSocket de mise à jour envoyée pour le ticket {instance.id}")
+        except Exception as e:
+            logger.error(f"Erreur lors de l'envoi de la notification WebSocket de mise à jour: {str(e)}")
+
+
+# Signal pour envoyer des notifications WebSocket lors de la création de commentaires
+@receiver(post_save, sender=Commentaire)
+def envoyer_notification_commentaire(sender, instance, created, **kwargs):
+    if created:
+        try:
+            from .serializers import CommentaireSerializer
+            from channels.layers import get_channel_layer
+            from asgiref.sync import async_to_sync
+
+            channel_layer = get_channel_layer()
+            if channel_layer:
+                # Sérialiser le commentaire
+                serializer = CommentaireSerializer(instance)
+                comment_data = serializer.data
+
+                # Envoyer la notification aux utilisateurs connectés au ticket
+                async_to_sync(channel_layer.group_send)(
+                    f'ticket_{instance.ticket.id}',
+                    {
+                        'type': 'chat_message',
+                        'comment': comment_data
+                    }
+                )
+                logger.info(f"Notification WebSocket de commentaire envoyée pour le ticket {instance.ticket.id}")
+        except Exception as e:
+            logger.error(f"Erreur lors de l'envoi de la notification WebSocket de commentaire: {str(e)}")
+    else:
+        # Commentaire mis à jour (confirmation d'instruction par exemple)
+        try:
+            from .serializers import CommentaireSerializer
+            from channels.layers import get_channel_layer
+            from asgiref.sync import async_to_sync
+
+            channel_layer = get_channel_layer()
+            if channel_layer:
+                # Sérialiser le commentaire mis à jour
+                serializer = CommentaireSerializer(instance)
+                comment_data = serializer.data
+
+                # Envoyer la notification de mise à jour d'instruction
+                async_to_sync(channel_layer.group_send)(
+                    f'ticket_{instance.ticket.id}',
+                    {
+                        'type': 'instruction_updated',
+                        'instruction': comment_data
+                    }
+                )
+                logger.info(f"Notification WebSocket d'instruction mise à jour envoyée pour le ticket {instance.ticket.id}")
+        except Exception as e:
+            logger.error(f"Erreur lors de l'envoi de la notification WebSocket d'instruction mise à jour: {str(e)}")

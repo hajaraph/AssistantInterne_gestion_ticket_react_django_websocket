@@ -439,12 +439,22 @@ class TicketCommentsView(APIView):
 
             # Vérifier les permissions d'accès au ticket
             user = request.user
-            if user.role == 'employe' and ticket.utilisateur_createur != user:
-                return Response(
-                    {'error': 'Accès refusé'},
-                    status=status.HTTP_403_FORBIDDEN
-                )
-            elif user.role == 'technicien' and ticket.technicien_assigne != user and ticket.utilisateur_createur != user:
+            if user.role == 'employe':
+                # L'employé peut voir les commentaires de ses propres tickets
+                if ticket.utilisateur_createur != user:
+                    return Response(
+                        {'error': 'Accès refusé'},
+                        status=status.HTTP_403_FORBIDDEN
+                    )
+            elif user.role == 'technicien':
+                # Le technicien peut voir les commentaires des tickets qui lui sont assignés OU qu'il a créés
+                if ticket.technicien_assigne != user and ticket.utilisateur_createur != user:
+                    return Response(
+                        {'error': 'Accès refusé'},
+                        status=status.HTTP_403_FORBIDDEN
+                    )
+            elif user.role != 'admin':
+                # Autres rôles n'ont pas accès
                 return Response(
                     {'error': 'Accès refusé'},
                     status=status.HTTP_403_FORBIDDEN

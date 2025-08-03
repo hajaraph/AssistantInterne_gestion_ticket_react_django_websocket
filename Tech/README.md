@@ -86,6 +86,78 @@ TYPE_ACTION_CHOICES = [
 ]
 ```
 
+### Relations entre les Modèles
+
+Le système utilise plusieurs modèles principaux qui interagissent entre eux :
+
+1. **CustomUser** (Utilisateur personnalisé)
+   - Lié à `Departement` via une clé étrangère (un utilisateur appartient à un département)
+   - Lié à `Ticket` en tant que créateur (`utilisateur_createur`) ou technicien assigné (`technicien_assigne`)
+   - Lié à `Commentaire` en tant qu'auteur (`utilisateur_auteur`)
+   - Lié à `Notification` en tant que destinataire
+
+2. **Departement**
+   - Contient plusieurs `CustomUser` (relation un-à-plusieurs)
+   - Contient plusieurs `Equipement` (relation un-à-plusieurs)
+   - Lié à `Ticket` via `Equipement`
+
+3. **Equipement**
+   - Appartient à un `Departement` (clé étrangère)
+   - Peut être associé à plusieurs `Ticket` (relation un-à-plusieurs)
+
+4. **Categorie**
+   - Classifie les `Ticket` (relation un-à-plusieurs)
+
+5. **Ticket**
+   - Appartient à un `CustomUser` (créateur)
+   - Peut être assigné à un `CustomUser` avec le rôle technicien
+   - Peut être associé à un `Equipement`
+   - Appartient à une `Categorie`
+   - Contient plusieurs `Commentaire` (relation un-à-plusieurs)
+   - Contient plusieurs `Notification` (relation un-à-plusieurs)
+
+6. **Commentaire**
+   - Appartient à un `Ticket`
+   - Créé par un `CustomUser`
+   - Peut avoir un `Commentaire` parent (pour les réponses en chaîne)
+   - Peut être une instruction de guidage avec confirmation
+
+7. **Notification**
+   - Liée à un `Ticket`
+   - Destinée à un `CustomUser`
+
+### Diagramme des relations
+```
++---------------+       +---------------+
+|  CustomUser   |       |  Departement  |
++---------------+       +---------------+
+        | 1                     | 1
+        |                       |
+        | *                   * |
+        +--------+     +--------+
+                 |     |
+            +----v-----v----+
+            |               |
+            |    Ticket     |
+            |               |
+            +----+-----+----+
+               1 |     | 1
+                 |     |
+         +-------v-+   |
+         |         |   |
+         |         |   |
+     +---v-----+   |   |
+     |Comment  |   |   |
+     |         |   |   |
+     +---------+   |   |
+                   |   |
+               +---v---v---+
+               |           |
+               | Notification|
+               |           |
+               +-----------+
+```
+
 ## 🔌 API Endpoints
 
 ### **Authentification**
