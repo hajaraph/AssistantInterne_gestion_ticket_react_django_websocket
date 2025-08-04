@@ -51,6 +51,109 @@ Tech/
 
 ## 📊 Modèles de Données
 
+### Relations entre les Modèles
+
+Le système utilise plusieurs modèles principaux qui interagissent entre eux :
+
+1. **CustomUser** (Utilisateur personnalisé)
+   - Appartient à un `Departement` (clé étrangère)
+   - Peut créer plusieurs `Ticket` (relation un-à-plusieurs via `utilisateur_createur`)
+   - Peut être assigné à plusieurs `Ticket` en tant que technicien (via `technicien_assigne`)
+   - Peut écrire plusieurs `Commentaire` (relation un-à-plusieurs via `utilisateur_auteur`)
+   - Peut recevoir plusieurs `Notification` (relation un-à-plusieurs)
+
+2. **Departement**
+   - Contient plusieurs `CustomUser` (relation un-à-plusieurs)
+   - Contient plusieurs `Equipement` (relation un-à-plusieurs)
+   - Influence indirectement les `Ticket` via les `Equipement`
+
+3. **Equipement**
+   - Appartient à un `Departement` (clé étrangère)
+   - Peut être associé à plusieurs `Ticket` (relation un-à-plusieurs)
+   - Influence la classification et le suivi des problèmes techniques
+
+4. **Categorie**
+   - Classifie les `Ticket` (relation un-à-plusieurs)
+   - Définit le type de problème ou de demande
+   - Influence le workflow et le traitement des tickets
+
+5. **Ticket**
+   - Appartient à un `CustomUser` (créateur via `utilisateur_createur`)
+   - Peut être assigné à un `CustomUser` technicien (via `technicien_assigne`)
+   - Peut être associé à un `Equipement` (optionnel)
+   - Appartient à une `Categorie` (obligatoire)
+   - Contient plusieurs `Commentaire` (relation un-à-plusieurs)
+   - Peut générer plusieurs `Notification`
+   - Le statut suit un workflow défini (`STATUT_TICKET_CHOICES`)
+
+6. **Commentaire**
+   - Appartient à un `Ticket` (clé étrangère)
+   - Créé par un `CustomUser` (via `utilisateur_auteur`)
+   - Peut avoir un `Commentaire` parent (pour les réponses en chaîne)
+   - Peut être une instruction de guidage avec confirmation
+   - Peut inclure des pièces jointes
+
+7. **Notification**
+   - Liée à un `Ticket` spécifique
+   - Destinée à un `CustomUser` spécifique
+   - Peut être de différents types (email, notification interne)
+   - Suit un cycle de vie (envoyé, lu, échec)
+
+### Diagramme des relations
+```
++---------------+       +---------------+
+|  CustomUser   |       |  Departement  |
++-------+-------+       +-------+-------+
+        | 1                     | 1
+        |                       |
+        | *                   * |
+        +--------+     +--------+
+                 |     |
+            +----v-----v----+       +------------+
+            |               |       |            |
+            |    Ticket     +-------+  Categorie |
+            |               |  1    |            |
+            +----+-----+----+       +------------+
+               1 |     | 1
+                 |     |
+         +-------v-+   |         +-------------+
+         |         |   |         |             |
+         |         |   |         |  Equipement |
+     +---v-----+   |   |         |             |
+     |Comment  |   |   +---------+-------------+
+     |         |   |             |
+     +---------+   |             |
+                   |             |
+               +---v---v----+    |
+               |            |    |
+               | Notification|   |
+               |            |   |
+               +------------+   |
+                                |
+                                |
+                         +------v------+
+                         |  Departement|
+                         +-------------+
+```
+
+### Flux des relations clés
+
+1. **Flux de création d'un ticket** :
+   - Un `CustomUser` crée un `Ticket`
+   - Le `Ticket` est associé à une `Categorie`
+   - Optionnellement, le `Ticket` peut être lié à un `Equipement`
+   - Des `Notification` sont générées pour les techniciens
+
+2. **Flux de commentaires** :
+   - Un `CustomUser` ou un technicien ajoute un `Commentaire` à un `Ticket`
+   - Si c'est une instruction, elle peut nécessiter une confirmation
+   - Des `Notification` sont envoyées aux parties prenantes
+
+3. **Gestion des équipements** :
+   - Les `Equipement` sont rattachés à des `Departement`
+   - Les problèmes d'`Equipement` sont suivis via des `Ticket`
+   - L'historique des interventions est conservé dans les `Commentaire`
+
 ### **CustomUser** - Utilisateurs
 ```python
 ROLE_CHOICES = [
@@ -84,79 +187,130 @@ TYPE_ACTION_CHOICES = [
     ('guidage_debut', 'Début du guidage à distance'),
     ('guidage_fin', 'Fin du guidage à distance'),
 ]
-```
 
-### Relations entre les Modèles
+## 🔍 Système de Diagnostic Avancé
 
-Le système utilise plusieurs modèles principaux qui interagissent entre eux :
+### Modèles du Système de Diagnostic
 
-1. **CustomUser** (Utilisateur personnalisé)
-   - Lié à `Departement` via une clé étrangère (un utilisateur appartient à un département)
-   - Lié à `Ticket` en tant que créateur (`utilisateur_createur`) ou technicien assigné (`technicien_assigne`)
-   - Lié à `Commentaire` en tant qu'auteur (`utilisateur_auteur`)
-   - Lié à `Notification` en tant que destinataire
+Le module de diagnostic comprend plusieurs modèles clés qui travaillent ensemble pour fournir une analyse complète des problèmes techniques :
 
-2. **Departement**
-   - Contient plusieurs `CustomUser` (relation un-à-plusieurs)
-   - Contient plusieurs `Equipement` (relation un-à-plusieurs)
-   - Lié à `Ticket` via `Equipement`
+1. **SessionDiagnostic**
+   - Représente une session complète de diagnostic
+   - Liée à un `CustomUser` (l'utilisateur qui effectue le diagnostic)
+   - Peut être associée à un `Equipement` spécifique
+   - Contient plusieurs `ReponseDiagnostic`
+   - Génère des `DiagnosticSysteme` automatiques
+   - Peut être liée à un `TemplateDiagnostic`
+   - Historique complet via `HistoriqueDiagnostic`
 
-3. **Equipement**
-   - Appartient à un `Departement` (clé étrangère)
-   - Peut être associé à plusieurs `Ticket` (relation un-à-plusieurs)
-
-4. **Categorie**
-   - Classifie les `Ticket` (relation un-à-plusieurs)
-
-5. **Ticket**
-   - Appartient à un `CustomUser` (créateur)
-   - Peut être assigné à un `CustomUser` avec le rôle technicien
-   - Peut être associé à un `Equipement`
+2. **QuestionDiagnostic**
+   - Questions du diagnostic avec différents types (choix multiple, texte, etc.)
    - Appartient à une `Categorie`
-   - Contient plusieurs `Commentaire` (relation un-à-plusieurs)
-   - Contient plusieurs `Notification` (relation un-à-plusieurs)
+   - Peut avoir une `QuestionDiagnostic` parente pour les sous-questions
+   - Contient plusieurs `ChoixReponse`
+   - Peut être incluse dans plusieurs `TemplateDiagnostic`
 
-6. **Commentaire**
-   - Appartient à un `Ticket`
-   - Créé par un `CustomUser`
-   - Peut avoir un `Commentaire` parent (pour les réponses en chaîne)
-   - Peut être une instruction de guidage avec confirmation
+3. **ReponseDiagnostic**
+   - Réponse d'un utilisateur à une `QuestionDiagnostic`
+   - Liée à une `SessionDiagnostic`
+   - Peut sélectionner plusieurs `ChoixReponse`
+   - Stocke des métadonnées comme le temps de réponse
 
-7. **Notification**
-   - Liée à un `Ticket`
-   - Destinée à un `CustomUser`
+4. **DiagnosticSysteme**
+   - Résultats des analyses automatiques du système
+   - Lié à une `SessionDiagnostic`
+   - Différents types : mémoire, disque, réseau, CPU, sécurité, etc.
+   - Inclut des scores et des recommandations
 
-### Diagramme des relations
+5. **TemplateDiagnostic**
+   - Modèle réutilisable pour les diagnostics courants
+   - Contient plusieurs `TemplateQuestion`
+   - Définit le flux et l'ordre des questions
+   - Peut inclure des conditions d'affichage personnalisées
+
+6. **RegleDiagnostic**
+   - Définit des règles d'analyse automatique
+   - Peut déclencher des actions spécifiques
+   - S'applique à des catégories spécifiques
+   - Utilise des conditions personnalisables
+
+### Flux de Diagnostic
+
+1. **Initialisation** :
+   - Création d'une `SessionDiagnostic`
+   - Sélection d'un `TemplateDiagnostic` (optionnel)
+   - Exécution automatique des diagnostics système
+
+2. **Questionnaire** :
+   - L'`ArbreDecisionEngine` détermine la prochaine question
+   - Les réponses sont stockées dans `ReponseDiagnostic`
+   - Les règles de `RegleDiagnostic` sont évaluées
+
+3. **Analyse** :
+   - Calcul des scores et priorités
+   - Génération de recommandations
+   - Création automatique de tickets si nécessaire
+
+4. **Rapport** :
+   - Vue d'ensemble des problèmes détectés
+   - Historique complet des actions
+   - Suggestions de résolution
+
+### Diagramme des Relations du Diagnostic
+
 ```
-+---------------+       +---------------+
-|  CustomUser   |       |  Departement  |
-+---------------+       +---------------+
-        | 1                     | 1
-        |                       |
-        | *                   * |
-        +--------+     +--------+
-                 |     |
-            +----v-----v----+
-            |               |
-            |    Ticket     |
-            |               |
-            +----+-----+----+
-               1 |     | 1
-                 |     |
-         +-------v-+   |
-         |         |   |
-         |         |   |
-     +---v-----+   |   |
-     |Comment  |   |   |
-     |         |   |   |
-     +---------+   |   |
-                   |   |
-               +---v---v---+
-               |           |
-               | Notification|
-               |           |
-               +-----------+
++------------------+       +------------------+
+| SessionDiagnostic|       | QuestionDiagnostic
++--------+---------+       +---------+--------+
+         | 1                         | 1
+         |                           |
+         | *                       * |
+         |                           |
+         | 1                       * |
++--------v---------+       +---------v--------+
+| ReponseDiagnostic|       | TemplateDiagnostic|
++--------+---------+       +---------+--------+
+         |                           |
+         | *                       * |
+         |                           |
++--------v---------+       +---------v--------+
+| DiagnosticSysteme|       |  TemplateQuestion|
++------------------+       +------------------+
+         |
+         |
++--------v---------+
+| RegleDiagnostic  |
++------------------+
 ```
+
+### Types de Diagnostic
+
+1. **Diagnostic Système**
+   - Analyse matérielle (CPU, mémoire, disque)
+   - Vérification des services système
+   - Détection des problèmes de performance
+
+2. **Diagnostic Réseau**
+   - Connectivité réseau
+   - Vitesse et latence
+   - Configuration IP/DNS
+
+3. **Diagnostic Sécurité**
+   - État de l'antivirus
+   - Mises à jour système
+   - Paramètres de sécurité
+
+4. **Questionnaire Interactif**
+   - Questions dynamiques
+   - Arbre de décision intelligent
+   - Adaptation en fonction des réponses
+
+### Intégration avec le Système de Tickets
+
+- Les diagnostics peuvent générer automatiquement des tickets
+- Les tickets incluent les résultats du diagnostic
+- Les techniciens voient les diagnostics associés aux tickets
+- Historique complet des diagnostics par équipement/utilisateur
 
 ## 🔌 API Endpoints
 

@@ -2,7 +2,12 @@ from django.contrib.auth.password_validation import validate_password
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
-from .models import Departement, CustomUser, Ticket, Categorie, Equipement, Commentaire
+from .models import (
+    Departement, CustomUser, Ticket, Categorie, Equipement, Commentaire,
+    QuestionDiagnostic, ChoixReponse, SessionDiagnostic, ReponseDiagnostic,
+    RegleDiagnostic, DiagnosticSysteme, TemplateDiagnostic, TemplateQuestion,
+    HistoriqueDiagnostic
+)
 
 
 class UserRegistrationSerializer(serializers.ModelSerializer):
@@ -390,3 +395,320 @@ class CommentaireCreateSerializer(serializers.ModelSerializer):
         """Create comment with current user as author."""
         validated_data['utilisateur_auteur'] = self.context['request'].user
         return super().create(validated_data)
+
+
+# Sérialiseurs pour le système de diagnostic
+
+class ChoixReponseSerializer(serializers.ModelSerializer):
+    """Sérialiseur pour les choix de réponse"""
+    class Meta:
+        model = ChoixReponse
+        fields = ['id', 'texte', 'valeur', 'score_criticite', 'action_suivante']
+
+
+class QuestionDiagnosticSerializer(serializers.ModelSerializer):
+    """Sérialiseur pour les questions de diagnostic"""
+    choix_reponses = ChoixReponseSerializer(many=True, read_only=True)
+    sous_questions = serializers.SerializerMethodField()
+
+    class Meta:
+        model = QuestionDiagnostic
+        fields = [
+            'id', 'titre', 'description', 'type_question', 'ordre',
+            'condition_affichage', 'est_critique', 'choix_reponses', 'sous_questions'
+        ]
+
+    def get_sous_questions(self, obj):
+        """Obtenir les sous-questions de manière récursive"""
+        sous_questions = obj.sous_questions.all().order_by('ordre')
+        return QuestionDiagnosticSerializer(sous_questions, many=True).data
+
+
+class ReponseDiagnosticSerializer(serializers.ModelSerializer):
+    """Sérialiseur pour les réponses de diagnostic"""
+    question = QuestionDiagnosticSerializer(read_only=True)
+    choix_selectionnes = ChoixReponseSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = ReponseDiagnostic
+        fields = [
+            'id', 'question', 'reponse_texte', 'choix_selectionnes',
+            'score_criticite', 'date_reponse'
+        ]
+
+
+class ReponseDiagnosticCreateSerializer(serializers.ModelSerializer):
+    """Sérialiseur pour créer une réponse de diagnostic"""
+    choix_selectionnes_ids = serializers.ListField(
+        child=serializers.IntegerField(),
+        required=False,
+        allow_empty=True
+    )
+
+    class Meta:
+        model = ReponseDiagnostic
+        fields = ['question', 'reponse_texte', 'choix_selectionnes_ids']
+
+    def create(self, validated_data):
+        choix_ids = validated_data.pop('choix_selectionnes_ids', [])
+        session = self.context['session']
+
+        # Créer la réponse
+        reponse = ReponseDiagnostic.objects.create(
+            session=session,
+            **validated_data
+        )
+
+        # Ajouter les choix sélectionnés et calculer le score
+        score_total = 0
+        if choix_ids:
+            choix_objets = ChoixReponse.objects.filter(id__in=choix_ids)
+            reponse.choix_selectionnes.set(choix_objets)
+            score_total = sum(choix.score_criticite for choix in choix_objets)
+
+        reponse.score_criticite = score_total
+        reponse.save()
+
+        return reponse
+
+
+class DiagnosticSystemeSerializer(serializers.ModelSerializer):
+    """Sérialiseur pour les diagnostics système"""
+    class Meta:
+        model = DiagnosticSysteme
+        fields = [
+            'id', 'type_diagnostic', 'resultat', 'statut',
+            'message', 'date_diagnostic'
+        ]
+
+
+class SessionDiagnosticSerializer(serializers.ModelSerializer):
+    """Sérialiseur pour les sessions de diagnostic"""
+    categorie = CategorieSerializer(read_only=True)
+    utilisateur = UserProfileSerializer(read_only=True)
+    reponses = ReponseDiagnosticSerializer(many=True, read_only=True)
+    diagnostics_systeme = DiagnosticSystemeSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = SessionDiagnostic
+        fields = [
+            'id', 'utilisateur', 'categorie', 'statut', 'score_criticite_total',
+            'priorite_estimee', 'date_creation', 'date_completion',
+            'diagnostic_automatique', 'recommandations', 'reponses',
+            'diagnostics_systeme'
+        ]
+
+
+class SessionDiagnosticCreateSerializer(serializers.ModelSerializer):
+    """Sérialiseur pour créer une session de diagnostic"""
+    class Meta:
+        model = SessionDiagnostic
+        fields = ['categorie']
+
+    def create(self, validated_data):
+        validated_data['utilisateur'] = self.context['request'].user
+        return super().create(validated_data)
+
+
+class RegleDiagnosticSerializer(serializers.ModelSerializer):
+    """Sérialiseur pour les règles de diagnostic"""
+    categorie = CategorieSerializer(read_only=True)
+
+    class Meta:
+        model = RegleDiagnostic
+        fields = [
+            'id', 'nom', 'description', 'categorie', 'conditions',
+            'actions', 'priorite_recommandee', 'message_utilisateur', 'est_active'
+        ]
+
+
+# Nouveaux sérialiseurs pour les modèles étendus
+
+class TemplateDiagnosticSerializer(serializers.ModelSerializer):
+    """Sérialiseur pour les templates de diagnostic"""
+    categorie = CategorieSerializer(read_only=True)
+
+    class Meta:
+        model = TemplateDiagnostic
+        fields = [
+            'id', 'nom', 'description', 'categorie', 'est_actif',
+            'date_creation', 'date_mise_a_jour', 'tags',
+            'est_lineaire', 'permettre_saut', 'permettre_revenir_arriere',
+            'afficher_progression', 'afficher_temps_estime',
+            'couleur_principale'
+        ]
+
+
+class TemplateQuestionSerializer(serializers.ModelSerializer):
+    """Sérialiseur pour les questions dans un template"""
+    question = QuestionDiagnosticSerializer(read_only=True)
+
+    class Meta:
+        model = TemplateQuestion
+        fields = ['ordre', 'question', 'condition_affichage']
+
+
+class HistoriqueDiagnosticSerializer(serializers.ModelSerializer):
+    """Sérialiseur pour l'historique des diagnostics"""
+    class Meta:
+        model = HistoriqueDiagnostic
+        fields = [
+            'id', 'action', 'date_action', 'details',
+            'ip_address', 'user_agent'
+        ]
+
+
+class SessionDiagnosticDetailSerializer(serializers.ModelSerializer):
+    """Sérialiseur détaillé pour les sessions avec historique et templates"""
+    categorie = CategorieSerializer(read_only=True)
+    utilisateur = UserProfileSerializer(read_only=True)
+    reponses = ReponseDiagnosticSerializer(many=True, read_only=True)
+    diagnostics_systeme = DiagnosticSystemeSerializer(many=True, read_only=True)
+    historique = HistoriqueDiagnosticSerializer(many=True, read_only=True)
+    equipement = EquipementSerializer(read_only=True)
+
+    class Meta:
+        model = SessionDiagnostic
+        fields = [
+            'id', 'utilisateur', 'categorie', 'statut', 'score_criticite_total',
+            'priorite_estimee', 'date_creation', 'date_debut', 'date_derniere_activite',
+            'date_completion', 'temps_total_passe', 'diagnostic_automatique',
+            'recommandations', 'score_confiance', 'donnees_supplementaires',
+            'equipement', 'reponses', 'diagnostics_systeme', 'historique'
+        ]
+
+
+class SessionDiagnosticCreateAvanceSerializer(serializers.ModelSerializer):
+    """Sérialiseur avancé pour créer une session avec équipement"""
+    class Meta:
+        model = SessionDiagnostic
+        fields = ['categorie', 'equipement']
+
+    def create(self, validated_data):
+        validated_data['utilisateur'] = self.context['request'].user
+
+        # Démarrer automatiquement la session
+        from django.utils import timezone
+        validated_data['date_debut'] = timezone.now()
+
+        return super().create(validated_data)
+
+
+class ReponseDiagnosticAvanceSerializer(serializers.ModelSerializer):
+    """Sérialiseur avancé pour créer une réponse avec temps et commentaire"""
+    choix_selectionnes_ids = serializers.ListField(
+        child=serializers.IntegerField(),
+        required=False,
+        allow_empty=True
+    )
+
+    class Meta:
+        model = ReponseDiagnostic
+        fields = [
+            'question', 'reponse_texte', 'choix_selectionnes_ids',
+            'temps_passe', 'est_incertain', 'commentaire'
+        ]
+
+    def create(self, validated_data):
+        choix_ids = validated_data.pop('choix_selectionnes_ids', [])
+        session = self.context['session']
+
+        # Créer la réponse
+        reponse = ReponseDiagnostic.objects.create(
+            session=session,
+            **validated_data
+        )
+
+        # Ajouter les choix sélectionnés et calculer le score
+        score_total = 0
+        if choix_ids:
+            choix_objets = ChoixReponse.objects.filter(id__in=choix_ids)
+            reponse.choix_selectionnes.set(choix_objets)
+            score_total = sum(choix.score_criticite for choix in choix_objets)
+
+        reponse.score_criticite = score_total
+        reponse.save()
+
+        # Enregistrer dans l'historique
+        from .models import HistoriqueDiagnostic
+        HistoriqueDiagnostic.objects.create(
+            session=session,
+            action='reponse',
+            utilisateur=session.utilisateur,
+            details={
+                'question_id': reponse.question.id,
+                'question_titre': reponse.question.titre,
+                'score_criticite': score_total,
+                'temps_passe': validated_data.get('temps_passe', 0),
+                'est_incertain': validated_data.get('est_incertain', False)
+            }
+        )
+
+        return reponse
+
+
+class QuestionDiagnosticAvanceSerializer(serializers.ModelSerializer):
+    """Sérialiseur avancé pour les questions avec métadonnées"""
+    choix_reponses = ChoixReponseSerializer(many=True, read_only=True)
+    sous_questions = serializers.SerializerMethodField()
+    temps_estime_total = serializers.SerializerMethodField()
+
+    class Meta:
+        model = QuestionDiagnostic
+        fields = [
+            'id', 'titre', 'description', 'type_question', 'ordre',
+            'condition_affichage', 'est_critique', 'temps_moyen',
+            'niveau_difficulte', 'tags', 'choix_reponses', 'sous_questions',
+            'temps_estime_total'
+        ]
+
+    def get_sous_questions(self, obj):
+        """Obtenir les sous-questions avec leurs métadonnées"""
+        sous_questions = obj.sous_questions.filter(actif=True).order_by('ordre')
+        return QuestionDiagnosticAvanceSerializer(sous_questions, many=True).data
+
+    def get_temps_estime_total(self, obj):
+        """Calculer le temps estimé total incluant les sous-questions"""
+        temps_total = obj.temps_moyen
+        for sous_question in obj.sous_questions.filter(actif=True):
+            temps_total += sous_question.temps_moyen
+        return temps_total
+
+
+class DiagnosticSystemeAvanceSerializer(serializers.ModelSerializer):
+    """Sérialiseur avancé pour les diagnostics système avec recommandations"""
+    class Meta:
+        model = DiagnosticSysteme
+        fields = [
+            'id', 'type_diagnostic', 'resultat', 'statut',
+            'message', 'date_diagnostic', 'duree_execution',
+            'niveau_impact', 'balises', 'recommandation'
+        ]
+
+
+class SessionStatistiquesSerializer(serializers.Serializer):
+    """Sérialiseur pour les statistiques d'une session"""
+    nombre_questions_repondues = serializers.IntegerField()
+    temps_total_passe = serializers.IntegerField()
+    score_moyen = serializers.FloatField()
+    nombre_diagnostics_erreur = serializers.IntegerField()
+    nombre_diagnostics_avertissement = serializers.IntegerField()
+    progression_pourcentage = serializers.FloatField()
+    questions_critiques_repondues = serializers.IntegerField()
+    derniere_activite = serializers.DateTimeField()
+
+
+class RegleDiagnosticAvanceSerializer(serializers.ModelSerializer):
+    """Sérialiseur avancé pour les règles avec historique d'exécution"""
+    categorie = CategorieSerializer(read_only=True)
+    question = QuestionDiagnosticSerializer(read_only=True)
+
+    class Meta:
+        model = RegleDiagnostic
+        fields = [
+            'id', 'nom', 'description', 'categorie', 'question',
+            'type_declencheur', 'conditions', 'type_action', 'parametres_action',
+            'priorite', 'est_active', 'date_creation', 'date_mise_a_jour',
+            'derniere_execution', 'dernier_resultat', 'dernier_message'
+        ]
+
