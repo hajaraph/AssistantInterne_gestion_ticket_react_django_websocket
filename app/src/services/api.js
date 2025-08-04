@@ -188,7 +188,7 @@ class ApiService {
   }
 
   async getMyTickets() {
-    const response = await this.request('/tickets/my/');  // Changé de '/tickets/my-tickets' vers '/tickets/my/'
+    const response = await this.request('/tickets/my');  // Changé de '/tickets/my-tickets' vers '/tickets/my/'
 
     if (!response.ok) {
       throw new Error('Impossible de récupérer vos tickets');
@@ -250,7 +250,7 @@ class ApiService {
 
   // Tickets pour techniciens
   async getTechnicianTickets() {
-    const response = await this.request('/technician/tickets/');  // Changé de '/tickets/technician' vers '/technician/tickets/'
+    const response = await this.request('/technician/tickets');  // Changé de '/tickets/technician' vers '/technician/tickets/'
 
     if (!response.ok) {
       throw new Error('Impossible de récupérer les tickets');
@@ -260,7 +260,7 @@ class ApiService {
   }
 
   async assignTicketToSelf(ticketId) {
-    const response = await this.request(`/technician/tickets/${ticketId}/assign/`, {  // Changé l'URL pour correspondre au backend
+    const response = await this.request(`/technician/tickets/${ticketId}/assign`, {  // Changé l'URL pour correspondre au backend
       method: 'POST',
     });
 
@@ -273,7 +273,7 @@ class ApiService {
   }
 
   async updateTicketStatus(ticketId, status) {
-    const response = await this.request(`/technician/tickets/${ticketId}/status/`, {  // Changé l'URL pour correspondre au backend
+    const response = await this.request(`/technician/tickets/${ticketId}/status`, {  // Changé l'URL pour correspondre au backend
       method: 'PATCH',
       body: JSON.stringify({ statut_ticket: status }),
     });
@@ -288,7 +288,7 @@ class ApiService {
 
   // Méthodes pour les commentaires et le guidage
   async getTicketComments(ticketId) {
-    const response = await this.request(`/tickets/${ticketId}/comments/`);
+    const response = await this.request(`/tickets/${ticketId}/comments`);
     if (!response.ok) {
       throw new Error('Erreur lors de la récupération des commentaires');
     }
@@ -296,7 +296,7 @@ class ApiService {
   }
 
   async addComment(ticketId, commentData) {
-    const response = await this.request(`/tickets/${ticketId}/comments/`, {
+    const response = await this.request(`/tickets/${ticketId}/comments`, {
       method: 'POST',
       body: JSON.stringify(commentData),
     });
@@ -309,7 +309,7 @@ class ApiService {
 
   // Méthodes pour le guidage à distance
   async startGuidance(ticketId) {
-    const response = await this.request(`/tickets/${ticketId}/guidance/start/`, {
+    const response = await this.request(`/tickets/${ticketId}/guidance/start`, {
       method: 'POST',
     });
     if (!response.ok) {
@@ -320,7 +320,7 @@ class ApiService {
   }
 
   async sendInstruction(ticketId, instructionData) {
-    const response = await this.request(`/tickets/${ticketId}/guidance/instruction/`, {
+    const response = await this.request(`/tickets/${ticketId}/guidance/instruction`, {
       method: 'POST',
       body: JSON.stringify(instructionData),
     });
@@ -332,7 +332,7 @@ class ApiService {
   }
 
   async confirmInstruction(commentId, message = 'Étape confirmée ✅') {
-    const response = await this.request(`/comments/${commentId}/confirm/`, {
+    const response = await this.request(`/comments/${commentId}/confirm`, {
       method: 'POST',
       body: JSON.stringify({ message }),
     });
@@ -344,7 +344,7 @@ class ApiService {
   }
 
   async endGuidance(ticketId, endData = {}) {
-    const response = await this.request(`/tickets/${ticketId}/guidance/end/`, {
+    const response = await this.request(`/tickets/${ticketId}/guidance/end`, {
       method: 'POST',
       body: JSON.stringify({
         message: 'Session de guidage terminée avec succès !',
@@ -356,6 +356,188 @@ class ApiService {
       const errorData = await response.json();
       throw new Error(errorData.error || 'Erreur lors de la fin du guidage');
     }
+    return await response.json();
+  }
+
+  // Diagnostic Intelligent
+  async getDiagnosticAccueil() {
+    const response = await this.request('/diagnostic/accueil');
+
+    if (!response.ok) {
+      throw new Error('Impossible de récupérer les données d\'accueil du diagnostic');
+    }
+
+    return await response.json();
+  }
+
+  async getDiagnosticCategories() {
+    const response = await this.request('/diagnostic/categories');
+
+    if (!response.ok) {
+      throw new Error('Impossible de récupérer les catégories de diagnostic');
+    }
+
+    return await response.json();
+  }
+
+  async createDiagnosticSession(sessionData) {
+    const response = await this.request('/diagnostic/session/create', {
+      method: 'POST',
+      body: JSON.stringify(sessionData),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.detail || 'Erreur lors de la création de la session de diagnostic');
+    }
+
+    return await response.json();
+  }
+
+  async getDiagnosticSession(sessionId) {
+    const response = await this.request(`/diagnostic/session/${sessionId}`);
+
+    if (!response.ok) {
+      throw new Error('Impossible de récupérer la session de diagnostic');
+    }
+
+    return await response.json();
+  }
+
+  async getNextQuestion(sessionId) {
+    const response = await this.request(`/diagnostic/session/${sessionId}/next-question`);
+
+    if (!response.ok) {
+      throw new Error('Impossible de récupérer la prochaine question');
+    }
+
+    return await response.json();
+  }
+
+  async submitDiagnosticAnswer(sessionId, answerData) {
+    const response = await this.request(`/diagnostic/session/${sessionId}/answer`, {
+      method: 'POST',
+      body: JSON.stringify(answerData),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.detail || 'Erreur lors de l\'envoi de la réponse');
+    }
+
+    return await response.json();
+  }
+
+  async getDiagnosticHistory() {
+    const response = await this.request('/diagnostic/history');
+
+    if (!response.ok) {
+      throw new Error('Impossible de récupérer l\'historique des diagnostics');
+    }
+
+    return await response.json();
+  }
+
+  async pauseDiagnosticSession(sessionId, reason = '') {
+    const response = await this.request(`/diagnostic/session/${sessionId}/pause`, {
+      method: 'POST',
+      body: JSON.stringify({ raison: reason }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.detail || 'Erreur lors de la mise en pause');
+    }
+
+    return await response.json();
+  }
+
+  async resumeDiagnosticSession(sessionId) {
+    const response = await this.request(`/diagnostic/session/${sessionId}/resume`, {
+      method: 'POST',
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.detail || 'Erreur lors de la reprise');
+    }
+
+    return await response.json();
+  }
+
+  async createTicketFromDiagnostic(sessionId) {
+    const response = await this.request(`/diagnostic/session/${sessionId}/create-ticket`, {
+      method: 'POST',
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.detail || 'Erreur lors de la création du ticket');
+    }
+
+    return await response.json();
+  }
+
+  async getDiagnosticStats(sessionId) {
+    const response = await this.request(`/diagnostic/session/${sessionId}/stats`);
+
+    if (!response.ok) {
+      throw new Error('Impossible de récupérer les statistiques de la session');
+    }
+
+    return await response.json();
+  }
+
+  // Diagnostic Intelligent - Système par étapes
+  async startDiagnosticEtapes(sessionData) {
+    const response = await this.request('/diagnostic/etapes/start', {
+      method: 'POST',
+      body: JSON.stringify(sessionData),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error || 'Erreur lors du démarrage du diagnostic par étapes');
+    }
+
+    return await response.json();
+  }
+
+  async getDiagnosticEtapes(sessionId) {
+    const response = await this.request(`/diagnostic/etapes/${sessionId}`);
+
+    if (!response.ok) {
+      throw new Error('Impossible de récupérer l\'état du diagnostic par étapes');
+    }
+
+    return await response.json();
+  }
+
+  async executerEtape(sessionId, donnees) {
+    const response = await this.request(`/diagnostic/etapes/${sessionId}/execute`, {
+      method: 'POST',
+      body: JSON.stringify(donnees),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error || 'Erreur lors de l\'exécution de l\'étape');
+    }
+
+    return await response.json();
+  }
+
+  async naviguerEtape(sessionId, direction) {
+    const response = await this.request(`/diagnostic/etapes/${sessionId}/navigate`, {
+      method: 'POST',
+      body: JSON.stringify({ direction }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error || 'Erreur lors de la navigation');
+    }
+
     return await response.json();
   }
 }

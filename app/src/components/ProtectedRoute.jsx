@@ -3,7 +3,7 @@ import { Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 
 const ProtectedRoute = ({ children, requiredRole = null, requiredPermission = null }) => {
-  const { isAuthenticated, user, hasPermission, hasRole, isLoading } = useAuth();
+  const { isAuthenticated, hasPermission, hasRole, isLoading } = useAuth();
   const location = useLocation();
 
   // Afficher un spinner pendant le chargement

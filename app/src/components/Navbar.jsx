@@ -48,6 +48,16 @@ const Navbar = () => {
       allowedRoles: ['employe']
     },
     {
+      name: 'Diagnostic Intelligent',
+      href: '/diagnostic',
+      icon: (
+        <svg className="w-5 h-5 text-gray-500 transition duration-75 dark:text-gray-400 group-hover:text-gray-900 dark:group-hover:text-white" fill="currentColor" viewBox="0 0 20 20">
+          <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a.75.75 0 000 1.5v3a1 1 0 001 1h1a.75.75 0 000-1.5v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+        </svg>
+      )
+      // Pas de allowedRoles = accessible à tous les utilisateurs connectés
+    },
+    {
       name: 'Support Technique',
       href: '/support-technique',
       icon: (

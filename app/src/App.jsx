@@ -10,6 +10,7 @@ import Rapport from './views/Rapport';
 import Login from './components/Login';
 import ProtectedRoute from './components/ProtectedRoute';
 import './App.css';
+import DiagnosticIntelligent from "./views/DiagnosticIntelligent.jsx";
 
 // Composant pour gérer la redirection de la page d'accueil
 const HomeRedirect = () => {
@@ -67,6 +68,17 @@ function AppContent() {
                 <Navbar />
                 <main className="flex-1 ml-64 p-8 overflow-auto">
                   <MyTickets />
+                </main>
+              </div>
+            </ProtectedRoute>
+          } />
+
+          <Route path="/diagnostic" element={
+            <ProtectedRoute>
+              <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex">
+                <Navbar />
+                <main className="flex-1 ml-64 p-8 overflow-auto">
+                  <DiagnosticIntelligent />
                 </main>
               </div>
             </ProtectedRoute>
