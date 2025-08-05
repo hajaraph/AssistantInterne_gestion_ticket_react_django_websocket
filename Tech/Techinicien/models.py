@@ -721,7 +721,6 @@ class ReponseDiagnostic(models.Model):
     session = models.ForeignKey(SessionDiagnostic, on_delete=models.CASCADE, related_name='reponses')
     question = models.ForeignKey(QuestionDiagnostic, on_delete=models.CASCADE, related_name='reponses')
     reponse_texte = models.TextField(blank=True)
-    choix_selectionnes = models.ManyToManyField(ChoixReponse, blank=True, related_name='reponses')
     score_criticite = models.IntegerField(default=0)
     date_reponse = models.DateTimeField(auto_now_add=True)
     temps_passe = models.PositiveIntegerField(default=0, help_text="Temps passé sur la question (en secondes)")
@@ -741,10 +740,37 @@ class ReponseDiagnostic(models.Model):
     def __str__(self):
         return f"{self.session} - {self.question.titre}"
 
+    @property
+    def choix_selectionnes(self):
+        """Propriété pour accéder aux choix sélectionnés"""
+        return ChoixReponse.objects.filter(selections__reponse=self)
+
+    def ajouter_choix(self, choix):
+        """Ajoute un choix sélectionné"""
+        ChoixSelectionne.objects.get_or_create(reponse=self, choix=choix)
+        self._recalculer_score()
+
+    def supprimer_choix(self, choix):
+        """Supprime un choix sélectionné"""
+        ChoixSelectionne.objects.filter(reponse=self, choix=choix).delete()
+        self._recalculer_score()
+
+    def vider_choix(self):
+        """Supprime tous les choix sélectionnés"""
+        ChoixSelectionne.objects.filter(reponse=self).delete()
+        self.score_criticite = 0
+        self.save(update_fields=['score_criticite'])
+
+    def _recalculer_score(self):
+        """Recalcule le score de criticité basé sur les choix sélectionnés"""
+        score_total = sum(
+            selection.choix.score_criticite
+            for selection in self.choix_selectionnes_list.all()
+        )
+        self.score_criticite = score_total
+        self.save(update_fields=['score_criticite'])
+
     def save(self, *args, **kwargs):
-        # Mettre à jour le score de criticité basé sur les choix sélectionnés
-        if self.choix_selectionnes.exists():
-            self.score_criticite = sum(choix.score_criticite for choix in self.choix_selectionnes.all())
         super().save(*args, **kwargs)
         
         # Mettre à jour le score de confiance de la session
@@ -905,16 +931,13 @@ def creer_ticket_automatique(sender, instance, created, **kwargs):
                 equipement=instance.equipement
             )
             
-            # Ajouter un lien vers la session de diagnostic dans les données supplémentaires
-            from django.urls import reverse
-            from django.conf import settings
-            
-            session_url = f"{settings.BASE_URL}{reverse('admin:diagnostic_sessiondiagnostic_change', args=[instance.id])}"
+            # Ajouter les données supplémentaires sans l'URL qui pose problème
             ticket.donnees_supplementaires = {
                 'session_diagnostic_id': instance.id,
-                'session_diagnostic_url': session_url,
                 'score_confiance': float(instance.score_confiance) if instance.score_confiance else 1.0,
                 'date_completion': instance.date_completion.isoformat() if instance.date_completion else None,
+                'type': 'creation_automatique',
+                'source': 'diagnostic_automatique'
             }
             ticket.save()
             
@@ -983,3 +1006,19 @@ def enregistrer_historique_session(sender, instance, created, **kwargs):
             # En cas d'erreur avec le tracker, on ignore silencieusement
             logger.error(f"Erreur lors du suivi des changements pour la session {instance.id}: {e}")
             pass
+
+
+# Modèle pour les sélections de choix (remplace la relation many-to-many)
+class ChoixSelectionne(models.Model):
+    """Représente un choix sélectionné pour une réponse de diagnostic"""
+    reponse = models.ForeignKey('ReponseDiagnostic', on_delete=models.CASCADE, related_name='choix_selectionnes_list')
+    choix = models.ForeignKey(ChoixReponse, on_delete=models.CASCADE, related_name='selections')
+    date_selection = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        unique_together = ['reponse', 'choix']
+        verbose_name = "Choix sélectionné"
+        verbose_name_plural = "Choix sélectionnés"
+    
+    def __str__(self):
+        return f"{self.reponse} - {self.choix.texte}"

@@ -1,96 +1,112 @@
 """
 Service pour gérer le diagnostic par étapes
+Permet de guider l'utilisateur à travers un processus de diagnostic structuré
 """
+
+import json
 import logging
 from typing import Dict, List, Any, Optional
 from django.utils import timezone
 
 from ..models import (
-    SessionDiagnostic, QuestionDiagnostic, TemplateDiagnostic,
-    DiagnosticSysteme, HistoriqueDiagnostic, ReponseDiagnostic
+    SessionDiagnostic, QuestionDiagnostic, ReponseDiagnostic,
+    DiagnosticSysteme, TemplateDiagnostic, TemplateQuestion,
+    HistoriqueDiagnostic, ChoixReponse
 )
-from ..diagnostic_engine import DiagnosticSystemeEngine
+from ..diagnostic_engine import DiagnosticSystemeEngine, ArbreDecisionEngine
 
 logger = logging.getLogger(__name__)
 
 
 class DiagnosticEtapesService:
-    """Service pour gérer le diagnostic par étapes avec un plan structuré"""
+    """Service pour gérer le diagnostic par étapes"""
 
     def __init__(self, session: SessionDiagnostic, template_id: Optional[int] = None):
         self.session = session
         self.template_id = template_id
+        self.template = self._obtenir_template()
+
+    def _obtenir_template(self) -> Optional[TemplateDiagnostic]:
+        """Obtient le template spécifié ou le template par défaut pour la catégorie"""
+        try:
+            if self.template_id:
+                return TemplateDiagnostic.objects.get(
+                    id=self.template_id,
+                    est_actif=True
+                )
+            else:
+                return TemplateDiagnostic.objects.filter(
+                    categorie=self.session.categorie,
+                    est_actif=True
+                ).first()
+        except TemplateDiagnostic.DoesNotExist:
+            return None
 
     def generer_plan_etapes(self) -> List[Dict[str, Any]]:
-        """Génère un plan d'étapes pour le diagnostic"""
-        plan_etapes = []
+        """Génère le plan d'étapes pour le diagnostic"""
+        etapes = []
 
-        # Étape 1: Diagnostic système automatique
-        plan_etapes.append({
+        # Étape 1: Diagnostic automatique du système
+        etapes.append({
             'id': 'diagnostic_systeme',
             'type': 'diagnostic_automatique',
             'titre': 'Analyse automatique du système',
-            'description': 'Le système analyse automatiquement votre ordinateur pour détecter les problèmes courants',
+            'description': 'Analyse des performances et de l\'état de votre ordinateur',
             'icone': 'computer',
-            'temps_estime': 30,  # en secondes
+            'temps_estime': 30,
             'obligatoire': True,
             'parametres': {
-                'types_diagnostic': ['memoire', 'disque', 'reseau', 'cpu', 'services']
+                'types_diagnostic': ['memoire', 'disque', 'reseau', 'cpu', 'performance']
             }
         })
 
-        # Étape 2: Questions de pré-filtrage
-        plan_etapes.append({
-            'id': 'questions_prefiltrage',
-            'type': 'questions',
-            'titre': 'Questions préliminaires',
-            'description': 'Quelques questions rapides pour orienter le diagnostic',
-            'icone': 'question',
-            'temps_estime': 60,
-            'obligatoire': True,
-            'parametres': {
-                'questions_ids': self._obtenir_questions_prefiltrage(),
-                'max_questions': 3
-            }
-        })
+        # Étape 2: Questions de diagnostic si template disponible
+        if self.template:
+            questions = self._obtenir_questions_template()
+            if questions:
+                etapes.append({
+                    'id': 'questionnaire',
+                    'type': 'questionnaire_interactif',
+                    'titre': f'Questionnaire - {self.session.categorie.nom_categorie}',
+                    'description': 'Répondez aux questions pour affiner le diagnostic',
+                    'icone': 'question-circle',
+                    'temps_estime': len(questions) * 30,
+                    'obligatoire': True,
+                    'parametres': {
+                        'questions': questions,
+                        'mode': 'adaptatif' if not self.template.est_lineaire else 'lineaire'
+                    }
+                })
+        else:
+            # Questions par défaut de la catégorie
+            questions_defaut = QuestionDiagnostic.objects.filter(
+                categorie=self.session.categorie,
+                actif=True,
+                question_parent__isnull=True
+            ).order_by('ordre')[:5]
 
-        # Étape 3: Diagnostic approfondi basé sur la catégorie
-        plan_etapes.append({
-            'id': 'diagnostic_approfondi',
-            'type': 'questions_avancees',
-            'titre': 'Diagnostic approfondi',
-            'description': f'Questions spécialisées pour {self.session.categorie.nom_categorie}',
-            'icone': 'search',
-            'temps_estime': 180,
-            'obligatoire': False,
-            'parametres': {
-                'categorie_id': self.session.categorie.id,
-                'adapter_selon_resultats': True
-            }
-        })
+            if questions_defaut.exists():
+                etapes.append({
+                    'id': 'questionnaire',
+                    'type': 'questionnaire_simple',
+                    'titre': 'Questions de diagnostic',
+                    'description': 'Questions rapides pour mieux comprendre votre problème',
+                    'icone': 'question-circle',
+                    'temps_estime': questions_defaut.count() * 30,
+                    'obligatoire': True,
+                    'parametres': {
+                        'questions': [self._serialiser_question(q) for q in questions_defaut]
+                    }
+                })
 
-        # Étape 4: Tests interactifs (optionnel)
-        plan_etapes.append({
-            'id': 'tests_interactifs',
-            'type': 'tests',
-            'titre': 'Tests interactifs',
-            'description': 'Tests guidés pour valider les solutions',
-            'icone': 'play',
-            'temps_estime': 120,
-            'obligatoire': False,
-            'parametres': {
-                'selon_probleme': True
-            }
-        })
-
-        # Étape 5: Synthèse et recommandations
-        plan_etapes.append({
-            'id': 'synthese',
-            'type': 'synthese',
-            'titre': 'Résultats et recommandations',
-            'description': 'Synthèse du diagnostic et plan d\'action',
-            'icone': 'report',
-            'temps_estime': 60,
+        # Étape 3: Analyse et recommandations
+        etapes.append({
+            'id': 'analyse_recommandations',
+            'type': 'analyse_resultats',
+            'titre': 'Analyse et recommandations',
+            'description': 'Analyse des résultats et génération des recommandations',
+            'icone': 'chart-line',
+            'temps_estime': 15,
             'obligatoire': True,
             'parametres': {
                 'generer_recommandations': True,
@@ -98,116 +114,154 @@ class DiagnosticEtapesService:
             }
         })
 
-        # Si un template est spécifié, adapter le plan
-        if self.template_id:
-            plan_etapes = self._adapter_plan_avec_template(plan_etapes)
-
-        return plan_etapes
-
-    def _obtenir_questions_prefiltrage(self) -> List[int]:
-        """Obtient les questions de pré-filtrage pour la catégorie"""
-        # Questions critiques de la catégorie, limitées à 3
-        questions = QuestionDiagnostic.objects.filter(
-            categorie=self.session.categorie,
-            est_critique=True,
-            actif=True
-        ).order_by('ordre')[:3]
-
-        return [q.id for q in questions]
-
-    def _adapter_plan_avec_template(self, plan_etapes: List[Dict]) -> List[Dict]:
-        """Adapte le plan d'étapes selon un template"""
-        try:
-            template = TemplateDiagnostic.objects.get(id=self.template_id, est_actif=True)
-
-            # Modifier l'étape de diagnostic approfondi selon le template
-            for etape in plan_etapes:
-                if etape['id'] == 'diagnostic_approfondi':
-                    etape['titre'] = f'Diagnostic: {template.nom}'
-                    etape['description'] = template.description or etape['description']
-                    etape['parametres']['template_id'] = template.id
-
-        except TemplateDiagnostic.DoesNotExist:
-            logger.warning(f"Template {self.template_id} non trouvé")
-
-        return plan_etapes
-
-    def executer_etape_actuelle(self, donnees_entree: Dict[str, Any]) -> Dict[str, Any]:
-        """Exécute l'étape actuelle du diagnostic"""
-        plan_etapes = self.session.donnees_supplementaires.get('plan_etapes', [])
-        etape_actuelle_idx = self.session.donnees_supplementaires.get('etape_actuelle', 0)
-        etapes_completees = self.session.donnees_supplementaires.get('etapes_completees', [])
-
-        if etape_actuelle_idx >= len(plan_etapes):
-            return {
-                'success': False,
-                'error': 'Aucune étape à exécuter'
+        # Étape 4: Actions recommandées
+        etapes.append({
+            'id': 'actions_recommandees',
+            'type': 'actions_utilisateur',
+            'titre': 'Actions recommandées',
+            'description': 'Actions que vous pouvez essayer avant de créer un ticket',
+            'icone': 'tools',
+            'temps_estime': 60,
+            'obligatoire': False,
+            'parametres': {
+                'actions_automatiques': True,
+                'guides_pas_a_pas': True
             }
+        })
 
-        etape_actuelle = plan_etapes[etape_actuelle_idx]
+        # Étape 5: Décision finale
+        etapes.append({
+            'id': 'decision_finale',
+            'type': 'decision',
+            'titre': 'Que souhaitez-vous faire ?',
+            'description': 'Choisissez la prochaine action selon les résultats du diagnostic',
+            'icone': 'decision',
+            'temps_estime': 0,
+            'obligatoire': True,
+            'parametres': {
+                'options': [
+                    'probleme_resolu',
+                    'creer_ticket_auto',
+                    'creer_ticket_manuel',
+                    'contacter_support'
+                ]
+            }
+        })
 
+        return etapes
+
+    def _obtenir_questions_template(self) -> List[Dict[str, Any]]:
+        """Obtient les questions du template"""
+        if not self.template:
+            return []
+
+        questions_template = self.template.template_questions.filter(
+            question__actif=True
+        ).order_by('ordre')
+
+        return [self._serialiser_question_template(qt) for qt in questions_template]
+
+    def _serialiser_question(self, question: QuestionDiagnostic) -> Dict[str, Any]:
+        """Sérialise une question pour l'étape"""
+        return {
+            'id': question.id,
+            'titre': question.titre,
+            'description': question.description,
+            'type': question.type_question,
+            'est_critique': question.est_critique,
+            'choix': [
+                {
+                    'id': choix.id,
+                    'texte': choix.texte,
+                    'valeur': choix.valeur,
+                    'score': choix.score_criticite
+                }
+                for choix in question.choix_reponses.all().order_by('ordre')
+            ]
+        }
+
+    def _serialiser_question_template(self, question_template: TemplateQuestion) -> Dict[str, Any]:
+        """Sérialise une question de template pour l'étape"""
+        question = question_template.question
+        return {
+            'id': question.id,
+            'titre': question.titre,
+            'description': question.description,
+            'type': question.type_question,
+            'est_critique': question.est_critique,
+            'ordre_template': question_template.ordre,
+            'conditions': question_template.condition_affichage,
+            'choix': [
+                {
+                    'id': choix.id,
+                    'texte': choix.texte,
+                    'valeur': choix.valeur,
+                    'score': choix.score_criticite
+                }
+                for choix in question.choix_reponses.all().order_by('ordre')
+            ]
+        }
+
+    def executer_etape_actuelle(self, donnees_etape: Dict[str, Any]) -> Dict[str, Any]:
+        """Exécute l'étape actuelle du diagnostic"""
         try:
-            # Exécuter l'étape selon son type
-            if etape_actuelle['type'] == 'diagnostic_automatique':
-                resultat = self._executer_diagnostic_automatique(etape_actuelle, donnees_entree)
-            elif etape_actuelle['type'] == 'questions':
-                resultat = self._executer_questions(etape_actuelle, donnees_entree)
-            elif etape_actuelle['type'] == 'questions_avancees':
-                resultat = self._executer_questions_avancees(etape_actuelle, donnees_entree)
-            elif etape_actuelle['type'] == 'tests':
-                resultat = self._executer_tests_interactifs(etape_actuelle, donnees_entree)
-            elif etape_actuelle['type'] == 'synthese':
-                resultat = self._executer_synthese(etape_actuelle, donnees_entree)
+            plan_etapes = self.session.donnees_supplementaires.get('plan_etapes', [])
+            etape_actuelle_idx = self.session.donnees_supplementaires.get('etape_actuelle', 0)
+            etapes_completees = self.session.donnees_supplementaires.get('etapes_completees', [])
+
+            if etape_actuelle_idx >= len(plan_etapes):
+                return {
+                    'success': False,
+                    'error': 'Aucune étape à exécuter'
+                }
+
+            etape_actuelle = plan_etapes[etape_actuelle_idx]
+            type_etape = etape_actuelle['type']
+
+            # Exécuter selon le type d'étape
+            if type_etape == 'diagnostic_automatique':
+                resultat = self._executer_diagnostic_automatique(etape_actuelle, donnees_etape)
+            elif type_etape in ['questionnaire_interactif', 'questionnaire_simple']:
+                resultat = self._executer_questionnaire(etape_actuelle, donnees_etape)
+            elif type_etape == 'analyse_resultats':
+                resultat = self._executer_analyse_resultats(etape_actuelle, donnees_etape)
+            elif type_etape == 'actions_utilisateur':
+                resultat = self._executer_actions_utilisateur(etape_actuelle, donnees_etape)
+            elif type_etape == 'decision':
+                resultat = self._executer_decision(etape_actuelle, donnees_etape)
             else:
                 return {
                     'success': False,
-                    'error': f'Type d\'étape non supporté: {etape_actuelle["type"]}'
+                    'error': f'Type d\'étape non supporté: {type_etape}'
                 }
 
-            # Marquer l'étape comme complétée
             if resultat['success']:
+                # Marquer l'étape comme complétée
                 etapes_completees.append({
                     'etape_id': etape_actuelle['id'],
                     'date_completion': timezone.now().isoformat(),
-                    'resultats': resultat.get('donnees', {})
+                    'resultat': resultat.get('resultat_etape', {})
                 })
 
                 # Passer à l'étape suivante
                 nouvelle_etape_idx = etape_actuelle_idx + 1
 
                 # Mettre à jour la session
-                self.session.donnees_supplementaires['etapes_completees'] = etapes_completees
                 self.session.donnees_supplementaires['etape_actuelle'] = nouvelle_etape_idx
+                self.session.donnees_supplementaires['etapes_completees'] = etapes_completees
                 self.session.save()
 
-                # Enregistrer dans l'historique
-                HistoriqueDiagnostic.objects.create(
-                    session=self.session,
-                    action='etape_completee',
-                    utilisateur=self.session.utilisateur,
-                    details={
-                        'etape_id': etape_actuelle['id'],
-                        'etape_titre': etape_actuelle['titre'],
-                        'resultats': resultat.get('donnees', {})
-                    }
-                )
+                # Prochaine étape
+                prochaine_etape = None
+                if nouvelle_etape_idx < len(plan_etapes):
+                    prochaine_etape = plan_etapes[nouvelle_etape_idx]
 
-                # Préparer la réponse
+                # Calculer la progression
                 progression = {
                     'etape_courante': nouvelle_etape_idx + 1,
                     'total_etapes': len(plan_etapes),
                     'pourcentage': round((len(etapes_completees) / len(plan_etapes)) * 100)
                 }
-
-                prochaine_etape = None
-                diagnostic_termine = False
-
-                if nouvelle_etape_idx < len(plan_etapes):
-                    prochaine_etape = plan_etapes[nouvelle_etape_idx]
-                else:
-                    # Diagnostic terminé
-                    diagnostic_termine = True
-                    self._finaliser_diagnostic()
 
                 return {
                     'success': True,
@@ -215,55 +269,32 @@ class DiagnosticEtapesService:
                     'resultat': resultat,
                     'prochaine_etape': prochaine_etape,
                     'progression': progression,
-                    'diagnostic_termine': diagnostic_termine
+                    'diagnostic_termine': nouvelle_etape_idx >= len(plan_etapes)
                 }
-            else:
-                return resultat
+
+            return resultat
 
         except Exception as e:
-            logger.error(f"Erreur lors de l'exécution de l'étape {etape_actuelle['id']}: {e}")
+            logger.error(f"Erreur lors de l'exécution de l'étape: {e}")
             return {
                 'success': False,
                 'error': f'Erreur lors de l\'exécution: {str(e)}'
             }
 
-    def _executer_diagnostic_automatique(self, etape: Dict, donnees: Dict) -> Dict[str, Any]:
-        """Exécute le diagnostic système automatique"""
+    def _executer_diagnostic_automatique(self, etape: Dict[str, Any], donnees: Dict[str, Any]) -> Dict[str, Any]:
+        """Exécute le diagnostic automatique du système"""
         try:
-            diagnostic_engine = DiagnosticSystemeEngine(self.session)
-            resultats = diagnostic_engine.executer_diagnostic_complet()
-
-            # Analyser les résultats pour détecter les problèmes
-            problemes_detectes = []
-            score_global = 0
-
-            for type_diag, resultat in resultats.items():
-                if resultat['statut'] == 'erreur':
-                    problemes_detectes.append({
-                        'type': type_diag,
-                        'message': resultat['message'],
-                        'severite': 'critique'
-                    })
-                    score_global += 10
-                elif resultat['statut'] == 'avertissement':
-                    problemes_detectes.append({
-                        'type': type_diag,
-                        'message': resultat['message'],
-                        'severite': 'moyen'
-                    })
-                    score_global += 5
+            engine = DiagnosticSystemeEngine(self.session)
+            resultats = engine.executer_diagnostic_complet()
 
             return {
                 'success': True,
-                'donnees': {
-                    'resultats_diagnostics': resultats,
-                    'problemes_detectes': problemes_detectes,
-                    'score_global': score_global,
-                    'temps_execution': 30
-                },
-                'message': f'{len(problemes_detectes)} problème(s) détecté(s)' if problemes_detectes else 'Système sain'
+                'resultat_etape': {
+                    'type': 'diagnostic_automatique',
+                    'diagnostics': resultats,
+                    'resume': self._generer_resume_diagnostic(resultats)
+                }
             }
-
         except Exception as e:
             logger.error(f"Erreur diagnostic automatique: {e}")
             return {
@@ -271,207 +302,186 @@ class DiagnosticEtapesService:
                 'error': f'Erreur lors du diagnostic automatique: {str(e)}'
             }
 
-    def _executer_questions(self, etape: Dict, donnees: Dict) -> Dict[str, Any]:
-        """Exécute une série de questions"""
+    def _executer_questionnaire(self, etape: Dict[str, Any], donnees: Dict[str, Any]) -> Dict[str, Any]:
+        """Exécute l'étape questionnaire"""
         try:
-            questions_ids = etape['parametres'].get('questions_ids', [])
             reponses = donnees.get('reponses', {})
 
-            if not reponses:
-                return {
-                    'success': False,
-                    'error': 'Aucune réponse fournie'
-                }
-
-            score_total = 0
-            reponses_enregistrees = []
-
             for question_id, reponse_data in reponses.items():
-                try:
-                    question = QuestionDiagnostic.objects.get(id=question_id)
+                # Sauvegarder la réponse
+                question = QuestionDiagnostic.objects.get(id=question_id)
 
-                    # Créer la réponse
-                    reponse = ReponseDiagnostic.objects.create(
-                        session=self.session,
-                        question=question,
-                        reponse_texte=reponse_data.get('texte', ''),
-                        temps_passe=reponse_data.get('temps_passe', 0)
-                    )
+                # Créer ou récupérer la réponse
+                reponse, created = ReponseDiagnostic.objects.get_or_create(
+                    session=self.session,
+                    question=question,
+                    defaults={
+                        'reponse_texte': reponse_data.get('texte', ''),
+                        'temps_passe': reponse_data.get('temps_passe', 0),
+                        'est_incertain': reponse_data.get('est_incertain', False),
+                        'commentaire': reponse_data.get('commentaire', '')
+                    }
+                )
 
-                    # Ajouter les choix sélectionnés
-                    if 'choix_ids' in reponse_data:
-                        from ..models import ChoixReponse
-                        choix = ChoixReponse.objects.filter(id__in=reponse_data['choix_ids'])
-                        reponse.choix_selectionnes.set(choix)
-                        score_total += sum(c.score_criticite for c in choix)
-
-                    reponse.score_criticite = score_total
+                # Si la réponse existe déjà, la mettre à jour
+                if not created:
+                    reponse.reponse_texte = reponse_data.get('texte', '')
+                    reponse.temps_passe = reponse_data.get('temps_passe', 0)
+                    reponse.est_incertain = reponse_data.get('est_incertain', False)
+                    reponse.commentaire = reponse_data.get('commentaire', '')
                     reponse.save()
 
-                    reponses_enregistrees.append({
-                        'question_id': question_id,
-                        'reponse_id': reponse.id,
-                        'score': reponse.score_criticite
-                    })
+                # Gérer les choix sélectionnés avec la nouvelle approche ForeignKey
+                choix_ids = reponse_data.get('choix_ids', [])
+                if choix_ids:
+                    # Vider les anciens choix
+                    reponse.vider_choix()
 
-                except QuestionDiagnostic.DoesNotExist:
-                    logger.warning(f"Question {question_id} non trouvée")
+                    # Ajouter les nouveaux choix un par un
+                    choix_objets = ChoixReponse.objects.filter(id__in=choix_ids)
+                    for choix in choix_objets:
+                        reponse.ajouter_choix(choix)
 
-            return {
-                'success': True,
-                'donnees': {
-                    'reponses_enregistrees': reponses_enregistrees,
-                    'score_etape': score_total,
-                    'nombre_questions': len(reponses_enregistrees)
-                },
-                'message': f'{len(reponses_enregistrees)} réponse(s) enregistrée(s)'
-            }
-
-        except Exception as e:
-            logger.error(f"Erreur lors de l'exécution des questions: {e}")
-            return {
-                'success': False,
-                'error': f'Erreur lors du traitement des questions: {str(e)}'
-            }
-
-    def _executer_questions_avancees(self, etape: Dict, donnees: Dict) -> Dict[str, Any]:
-        """Exécute les questions avancées basées sur les résultats précédents"""
-        # Adapter les questions selon les résultats des étapes précédentes
-        etapes_completees = self.session.donnees_supplementaires.get('etapes_completees', [])
-
-        # Analyser les problèmes détectés pour adapter les questions
-        questions_adaptees = self._adapter_questions_selon_problemes(etapes_completees)
-
-        # Utiliser la même logique que _executer_questions mais avec les questions adaptées
-        etape['parametres']['questions_ids'] = questions_adaptees
-        return self._executer_questions(etape, donnees)
-
-    def _executer_tests_interactifs(self, etape: Dict, donnees: Dict) -> Dict[str, Any]:
-        """Exécute des tests interactifs"""
-        try:
-            resultats_tests = donnees.get('resultats_tests', {})
-
-            # Traiter les résultats des tests
-            tests_reussis = 0
-            tests_total = len(resultats_tests)
-
-            for test_id, resultat in resultats_tests.items():
-                if resultat.get('succes', False):
-                    tests_reussis += 1
+            # Mettre à jour le score total de la session
+            score_total = sum(r.score_criticite for r in self.session.reponses.all())
+            self.session.score_criticite_total = score_total
+            self.session.save()
 
             return {
                 'success': True,
-                'donnees': {
-                    'tests_reussis': tests_reussis,
-                    'tests_total': tests_total,
-                    'taux_succes': (tests_reussis / tests_total * 100) if tests_total > 0 else 0,
-                    'resultats_detailles': resultats_tests
-                },
-                'message': f'{tests_reussis}/{tests_total} tests réussis'
+                'resultat_etape': {
+                    'type': 'questionnaire',
+                    'nombre_reponses': len(reponses),
+                    'score_total': score_total
+                }
             }
 
         except Exception as e:
+            logger.error(f"Erreur questionnaire: {e}")
             return {
                 'success': False,
-                'error': f'Erreur lors des tests: {str(e)}'
+                'error': f'Erreur lors du questionnaire: {str(e)}'
             }
 
-    def _executer_synthese(self, etape: Dict, donnees: Dict) -> Dict[str, Any]:
-        """Génère la synthèse finale du diagnostic"""
+    def _executer_analyse_resultats(self, etape: Dict[str, Any], donnees: Dict[str, Any]) -> Dict[str, Any]:
+        """Exécute l'analyse des résultats et génère les recommandations"""
         try:
-            from ..diagnostic_engine import ArbreDecisionEngine
+            engine = ArbreDecisionEngine(self.session)
 
-            # Calculer le score total et la priorité
-            arbre_engine = ArbreDecisionEngine(self.session)
-            priorite, score_total = arbre_engine.calculer_priorite_estimee()
-            recommandations = arbre_engine.generer_recommandations()
+            # Calculer la priorité estimée
+            priorite, score_total = engine.calculer_priorite_estimee()
 
-            # Analyser toutes les étapes pour créer un résumé
-            etapes_completees = self.session.donnees_supplementaires.get('etapes_completees', [])
-
-            resume_etapes = []
-            for etape_completee in etapes_completees:
-                resume_etapes.append({
-                    'etape': etape_completee['etape_id'],
-                    'statut': 'completee',
-                    'problemes_detectes': len(etape_completee.get('resultats', {}).get('problemes_detectes', []))
-                })
+            # Générer les recommandations
+            recommandations = engine.generer_recommandations()
 
             # Mettre à jour la session
-            self.session.score_criticite_total = score_total
             self.session.priorite_estimee = priorite
+            self.session.score_criticite_total = score_total
             self.session.recommandations = recommandations
             self.session.save()
 
             return {
                 'success': True,
-                'donnees': {
-                    'priorite_finale': priorite,
+                'resultat_etape': {
+                    'type': 'analyse',
+                    'priorite_estimee': priorite,
                     'score_total': score_total,
                     'recommandations': recommandations,
-                    'resume_etapes': resume_etapes,
-                    'duree_totale': self.session.temps_total_passe
-                },
-                'message': 'Diagnostic terminé avec succès'
+                    'niveau_criticite': self._determiner_niveau_criticite(priorite, score_total)
+                }
             }
 
         except Exception as e:
+            logger.error(f"Erreur analyse: {e}")
             return {
                 'success': False,
-                'error': f'Erreur lors de la synthèse: {str(e)}'
+                'error': f'Erreur lors de l\'analyse: {str(e)}'
             }
 
-    def _adapter_questions_selon_problemes(self, etapes_completees: List[Dict]) -> List[int]:
-        """Adapte les questions selon les problèmes détectés dans les étapes précédentes"""
-        questions_ids = []
+    def _executer_actions_utilisateur(self, etape: Dict[str, Any], donnees: Dict[str, Any]) -> Dict[str, Any]:
+        """Exécute les actions recommandées à l'utilisateur"""
+        actions_effectuees = donnees.get('actions_effectuees', [])
 
-        # Analyser les problèmes détectés
-        for etape in etapes_completees:
-            if etape['etape_id'] == 'diagnostic_systeme':
-                problemes = etape.get('resultats', {}).get('problemes_detectes', [])
+        # Enregistrer les actions dans l'historique
+        HistoriqueDiagnostic.objects.create(
+            session=self.session,
+            action='systeme',
+            utilisateur=self.session.utilisateur,
+            details={
+                'actions_effectuees': actions_effectuees,
+                'etape': 'actions_utilisateur'
+            }
+        )
 
-                # Selon les types de problèmes, sélectionner des questions spécifiques
-                for probleme in problemes:
-                    if probleme['type'] == 'memoire':
-                        questions_memoire = QuestionDiagnostic.objects.filter(
-                            categorie=self.session.categorie,
-                            tags__contains=['memoire'],
-                            actif=True
-                        ).values_list('id', flat=True)[:2]
-                        questions_ids.extend(questions_memoire)
+        return {
+            'success': True,
+            'resultat_etape': {
+                'type': 'actions',
+                'actions_effectuees': actions_effectuees,
+                'nombre_actions': len(actions_effectuees)
+            }
+        }
 
-                    elif probleme['type'] == 'reseau':
-                        questions_reseau = QuestionDiagnostic.objects.filter(
-                            categorie=self.session.categorie,
-                            tags__contains=['reseau'],
-                            actif=True
-                        ).values_list('id', flat=True)[:2]
-                        questions_ids.extend(questions_reseau)
+    def _executer_decision(self, etape: Dict[str, Any], donnees: Dict[str, Any]) -> Dict[str, Any]:
+        """Exécute l'étape de décision finale"""
+        decision = donnees.get('decision')
 
-        # Si aucun problème spécifique, prendre les questions par défaut de la catégorie
-        if not questions_ids:
-            questions_ids = list(QuestionDiagnostic.objects.filter(
-                categorie=self.session.categorie,
-                actif=True
-            ).order_by('ordre').values_list('id', flat=True)[:5])
+        if not decision:
+            return {
+                'success': False,
+                'error': 'Aucune décision fournie'
+            }
 
-        return questions_ids
-
-    def _finaliser_diagnostic(self):
-        """Finalise le diagnostic et met à jour le statut de la session"""
+        # Marquer la session comme complète
         self.session.statut = 'complete'
         self.session.date_completion = timezone.now()
         self.session.save()
 
-        # Enregistrer dans l'historique
-        HistoriqueDiagnostic.objects.create(
-            session=self.session,
-            action='completion',
-            utilisateur=self.session.utilisateur,
-            details={
-                'diagnostic_par_etapes': True,
-                'etapes_completees': len(self.session.donnees_supplementaires.get('etapes_completees', [])),
-                'score_final': self.session.score_criticite_total,
-                'priorite_finale': self.session.priorite_estimee
+        return {
+            'success': True,
+            'resultat_etape': {
+                'type': 'decision',
+                'decision': decision,
+                'session_complete': True
             }
-        )
+        }
+
+    def _generer_resume_diagnostic(self, diagnostics: Dict[str, Any]) -> Dict[str, Any]:
+        """Génère un résumé des diagnostics"""
+        problemes = []
+        avertissements = []
+        ok_count = 0
+
+        for type_diag, resultat in diagnostics.items():
+            if resultat['statut'] == 'erreur':
+                problemes.append({
+                    'type': type_diag,
+                    'message': resultat['message']
+                })
+            elif resultat['statut'] == 'avertissement':
+                avertissements.append({
+                    'type': type_diag,
+                    'message': resultat['message']
+                })
+            else:
+                ok_count += 1
+
+        return {
+            'problemes_critiques': len(problemes),
+            'avertissements': len(avertissements),
+            'tests_ok': ok_count,
+            'total_tests': len(diagnostics),
+            'details_problemes': problemes,
+            'details_avertissements': avertissements
+        }
+
+    def _determiner_niveau_criticite(self, priorite: str, score: int) -> str:
+        """Détermine le niveau de criticité pour l'affichage"""
+        if priorite == 'critique':
+            return 'critique'
+        elif priorite == 'urgent':
+            return 'urgent'
+        elif priorite == 'normal':
+            return 'normal'
+        else:
+            return 'faible'

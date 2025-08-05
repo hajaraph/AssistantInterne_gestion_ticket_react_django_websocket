@@ -5,6 +5,8 @@ import {FaPlus} from "react-icons/fa6";
 import TicketDetailsModal from "../components/modals/TicketDetailsModal.jsx";
 import StatusBadge from "../components/badges/StatusBadge.jsx";
 import PriorityBadge from "../components/badges/PriorityBadge.jsx";
+import DiagnosticOrTicketModal from "../components/modals/DiagnosticOrTicketModal.jsx";
+import DiagnosticEtapes from "../components/DiagnosticEtapes.jsx";
 import NewTicketModal from "../components/modals/NewTicketModal.jsx";
 import apiService from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
@@ -21,6 +23,11 @@ const MyTickets = () => {
   const [statusFilter, setStatusFilter] = useState('Tous');
   const [selectedTicket, setSelectedTicket] = useState(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
+
+  // Nouveaux états pour le diagnostic
+  const [isDiagnosticOrTicketModalOpen, setIsDiagnosticOrTicketModalOpen] = useState(false);
+  const [isDiagnosticEtapesOpen, setIsDiagnosticEtapesOpen] = useState(false);
+  const [selectedCategoryForDiagnostic, setSelectedCategoryForDiagnostic] = useState(null);
   const [isNewTicketModalOpen, setIsNewTicketModalOpen] = useState(false);
 
   const { user } = useAuth();
@@ -124,6 +131,61 @@ const MyTickets = () => {
     setSelectedTicket(ticket);
     setIsModalOpen(true);
   };
+  // Gérer le clic sur "Nouveau problème" - maintenant avec choix diagnostic/ticket
+  const handleNewProblem = () => {
+    setIsDiagnosticOrTicketModalOpen(true);
+  };
+
+  // Gérer le choix de démarrer un diagnostic
+  const handleStartDiagnostic = (categoryId) => {
+    setSelectedCategoryForDiagnostic(categoryId);
+    setIsDiagnosticOrTicketModalOpen(false);
+    setIsDiagnosticEtapesOpen(true);
+  };
+
+  // Gérer le choix de créer un ticket directement
+  const handleCreateDirectTicket = () => {
+    setIsDiagnosticOrTicketModalOpen(false);
+    setIsNewTicketModalOpen(true);
+  };
+
+  // Gérer la fin du diagnostic
+  const handleDiagnosticComplete = (result) => {
+    setIsDiagnosticEtapesOpen(false);
+
+    // Selon la décision finale de l'utilisateur
+    if (result?.resultat_etape?.decision === 'creer_ticket_auto') {
+      // Créer automatiquement un ticket avec les informations du diagnostic
+      createTicketFromDiagnostic(result);
+    } else if (result?.resultat_etape?.decision === 'creer_ticket_manuel') {
+      // Ouvrir le modal de création manuelle
+      setIsNewTicketModalOpen(true);
+    } else if (result?.resultat_etape?.decision === 'probleme_resolu') {
+      // Afficher un message de succès
+      alert('Parfait ! Votre problème a été résolu grâce au diagnostic automatique.');
+      // Optionnel : recharger les tickets pour voir les éventuels tickets automatiques
+      loadTickets(true);
+    }
+  };
+
+  // Créer un ticket automatiquement à partir du diagnostic
+  const createTicketFromDiagnostic = async (diagnosticResult) => {
+    try {
+      // Cette fonction utilise l'API existante pour créer un ticket depuis un diagnostic
+      const response = await apiService.post(`/diagnostic/session/${diagnosticResult.session_id}/create-ticket`);
+
+      if (response.data.ticket_id) {
+        // Recharger les tickets pour inclure le nouveau
+        loadTickets(true);
+        alert('Ticket créé automatiquement avec les informations du diagnostic !');
+      }
+    } catch (error) {
+      console.error('Erreur lors de la création automatique du ticket:', error);
+      // En cas d'erreur, proposer la création manuelle
+      setIsNewTicketModalOpen(true);
+    }
+  };
+
 
   // Affichage du loading
   if (loading) {
@@ -197,11 +259,11 @@ const MyTickets = () => {
         <h1 className="text-3xl font-bold text-gray-800">Mes tickets</h1>
         {user?.role === 'employe' && (
           <button
-            onClick={handleNewTicket}
+            onClick={handleNewProblem}
             className="flex items-center gap-2 px-4 py-2 bg-[var(--primary-color)] text-white rounded-md hover:bg-[var(--primary-dark)] transition-colors"
           >
             <FaPlus />
-            <span>Nouveau</span>
+            <span>Nouveau problème</span>
           </button>
         )}
       </div>
@@ -363,6 +425,20 @@ const MyTickets = () => {
           loadTickets(true); // Recharger la liste après mise à jour
           setIsModalOpen(false); // Fermer le modal
         }}
+      />
+
+      <DiagnosticOrTicketModal
+        isOpen={isDiagnosticOrTicketModalOpen}
+        onClose={() => setIsDiagnosticOrTicketModalOpen(false)}
+        onStartDiagnostic={handleStartDiagnostic}
+        onCreateTicket={handleCreateDirectTicket}
+      />
+
+      <DiagnosticEtapes
+        isOpen={isDiagnosticEtapesOpen}
+        onClose={() => setIsDiagnosticEtapesOpen(false)}
+        categoryId={selectedCategoryForDiagnostic}
+        onComplete={handleDiagnosticComplete}
       />
     </div>
   );

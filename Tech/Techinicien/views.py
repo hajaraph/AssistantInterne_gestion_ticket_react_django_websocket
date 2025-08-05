@@ -1514,7 +1514,8 @@ class DiagnosticEtapesView(APIView):
     """Vue pour gérer le diagnostic par étapes"""
     permission_classes = [IsAuthenticated]
 
-    def post(self, request):
+    @staticmethod
+    def post(request):
         """Démarrer un nouveau diagnostic par étapes"""
         try:
             categorie_id = request.data.get('categorie')

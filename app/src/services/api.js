@@ -50,6 +50,80 @@ class ApiService {
     }
   }
 
+  // Méthodes HTTP de base
+  async get(endpoint, options = {}) {
+    const response = await this.request(endpoint, {
+      method: 'GET',
+      ...options,
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ detail: 'Erreur réseau' }));
+      throw new Error(errorData.detail || `Erreur HTTP ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async post(endpoint, data = null, options = {}) {
+    const response = await this.request(endpoint, {
+      method: 'POST',
+      body: data ? JSON.stringify(data) : null,
+      ...options,
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ detail: 'Erreur réseau' }));
+      throw new Error(errorData.detail || `Erreur HTTP ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async put(endpoint, data = null, options = {}) {
+    const response = await this.request(endpoint, {
+      method: 'PUT',
+      body: data ? JSON.stringify(data) : null,
+      ...options,
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ detail: 'Erreur réseau' }));
+      throw new Error(errorData.detail || `Erreur HTTP ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async patch(endpoint, data = null, options = {}) {
+    const response = await this.request(endpoint, {
+      method: 'PATCH',
+      body: data ? JSON.stringify(data) : null,
+      ...options,
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ detail: 'Erreur réseau' }));
+      throw new Error(errorData.detail || `Erreur HTTP ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async delete(endpoint, options = {}) {
+    const response = await this.request(endpoint, {
+      method: 'DELETE',
+      ...options,
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ detail: 'Erreur réseau' }));
+      throw new Error(errorData.detail || `Erreur HTTP ${response.status}`);
+    }
+
+    return response.status === 204 ? null : await response.json();
+  }
+
   // Authentification
   async login(credentials) {
     const response = await this.request('/login', {
