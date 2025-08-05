@@ -13,7 +13,9 @@ from .views import (
     # Nouvelles vues avancées
     TemplatesDiagnosticView, SessionStatistiquesView, SessionReprendreView,
     SessionPauseView, ReponseAvanceeView, QuestionAvanceeView,
-    DiagnosticAnalyticsView, DiagnosticAccueilView, DiagnosticEtapesView, ExecuterEtapeView, PasserEtapeView
+    DiagnosticAnalyticsView, DiagnosticAccueilView, DiagnosticEtapesView, ExecuterEtapeView, PasserEtapeView,
+    # Vues du tableau de bord
+    DashboardDataView
 )
 
 urlpatterns = [
@@ -38,6 +40,9 @@ urlpatterns = [
     path('technician/tickets', TechnicianTicketsView.as_view(), name='technician_tickets'),
     path('technician/tickets/<int:ticket_id>/assign', AssignTicketToSelfView.as_view(), name='assign_ticket'),
     path('technician/tickets/<int:ticket_id>/status', UpdateTicketStatusView.as_view(), name='update_ticket_status'),
+
+    # Dashboard URL
+    path('dashboard', DashboardDataView.as_view(), name='dashboard_data'),
 
     # Comments and Chat URLs
     path('tickets/<int:ticket_id>/comments', TicketCommentsView.as_view(), name='ticket_comments'),

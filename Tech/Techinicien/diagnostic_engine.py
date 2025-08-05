@@ -1,8 +1,3 @@
-"""
-Moteur de diagnostic automatique pour analyser l'état du système
-et guider l'utilisateur à travers un questionnaire intelligent
-"""
-
 import json
 import logging
 import platform
@@ -451,7 +446,7 @@ class DiagnosticSystemeEngine:
 
     @staticmethod
     def diagnostic_performance() -> Dict[str, Any]:
-        """Diagnostic de performance global"""
+        """Diagnostic de performance global avec détection des applications gourmandes"""
         try:
             # Temps de démarrage du système
             boot_time = psutil.boot_time()
@@ -472,6 +467,7 @@ class DiagnosticSystemeEngine:
                 score_performance -= 10
 
             # Test rapide de lecture disque
+            disk_test_time = None
             try:
                 disk_test_start = time.time()
                 test_file = "test_perf_temp.tmp"
@@ -490,27 +486,100 @@ class DiagnosticSystemeEngine:
                     score_performance -= 5
 
             except Exception as e:
-                logger.error(f"Erreur diagnostic test: {e}")
+                logger.error(f"Erreur diagnostic test disque: {e}")
                 disk_test_time = None
+
+            # Détecter les applications gourmandes (processus avec forte utilisation)
+            applications_gourmandes = []
+            processus_total = 0
+
+            try:
+                # Attendre un moment pour avoir des mesures précises du CPU
+                time.sleep(1)
+
+                for proc in psutil.process_iter(['pid', 'name', 'cpu_percent', 'memory_percent', 'memory_info']):
+                    try:
+                        info = proc.info
+                        processus_total += 1
+
+                        # Critères pour une application gourmande
+                        cpu_seuil = 15.0  # Plus de 15% CPU
+                        mem_seuil = 5.0   # Plus de 5% RAM
+
+                        if (info['cpu_percent'] and info['cpu_percent'] > cpu_seuil) or \
+                           (info['memory_percent'] and info['memory_percent'] > mem_seuil):
+
+                            # Calculer la mémoire en MB
+                            memory_mb = 0
+                            if info['memory_info']:
+                                memory_mb = round(info['memory_info'].rss / (1024 * 1024), 1)
+
+                            app_info = {
+                                'nom': info['name'],
+                                'pid': info['pid'],
+                                'cpu_percent': round(info['cpu_percent'] or 0, 1),
+                                'memory_percent': round(info['memory_percent'] or 0, 1),
+                                'memory_mb': memory_mb,
+                                'impact_performance': 'elevé' if (info['cpu_percent'] or 0) > 25 or (info['memory_percent'] or 0) > 10 else 'moyen'
+                            }
+
+                            # Éviter les doublons (même nom de processus)
+                            if not any(app['nom'] == app_info['nom'] for app in applications_gourmandes):
+                                applications_gourmandes.append(app_info)
+
+                    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                        continue
+
+                # Trier par impact (CPU + mémoire)
+                applications_gourmandes.sort(
+                    key=lambda x: (x['cpu_percent'] + x['memory_percent']),
+                    reverse=True
+                )
+
+                # Garder seulement les 10 plus gourmandes
+                applications_gourmandes = applications_gourmandes[:10]
+
+                # Ajuster le score de performance selon les applications détectées
+                if applications_gourmandes:
+                    apps_critiques = [app for app in applications_gourmandes if app['impact_performance'] == 'elevé']
+                    if len(apps_critiques) >= 3:
+                        score_performance -= 20
+                    elif len(apps_critiques) >= 1:
+                        score_performance -= 10
+                    elif len(applications_gourmandes) >= 5:
+                        score_performance -= 5
+
+            except Exception as e:
+                logger.error(f"Erreur lors de la détection des applications gourmandes: {e}")
 
             resultats = {
                 'uptime_hours': round(uptime_hours, 1),
                 'score_performance': max(0, score_performance),
                 'temps_test_disque': disk_test_time,
                 'processeurs': cpu_count,
-                'memoire_totale_gb': round(memory.total / (1024**3), 2)
+                'memoire_totale_gb': round(memory.total / (1024**3), 2),
+                'applications_gourmandes': applications_gourmandes,
+                'nombre_processus_total': processus_total,
+                'utilisation_cpu_actuelle': psutil.cpu_percent(interval=0.1),
+                'utilisation_memoire_actuelle': memory.percent
             }
 
-            # Déterminer le statut
+            # Déterminer le statut avec prise en compte des applications gourmandes
             if score_performance >= 80:
                 statut = 'ok'
                 message = f"Performance excellente (score: {score_performance}/100)"
             elif score_performance >= 60:
                 statut = 'avertissement'
                 message = f"Performance acceptable (score: {score_performance}/100)"
+                if applications_gourmandes:
+                    message += f" - {len(applications_gourmandes)} application(s) gourmande(s) détectée(s)"
             else:
                 statut = 'erreur'
                 message = f"Performance dégradée (score: {score_performance}/100)"
+                if applications_gourmandes:
+                    apps_critiques = [app for app in applications_gourmandes if app['impact_performance'] == 'elevé']
+                    if apps_critiques:
+                        message += f" - {len(apps_critiques)} application(s) très gourmande(s)"
 
             return {
                 'statut': statut,
@@ -769,71 +838,450 @@ class ArbreDecisionEngine:
             return 'faible', int(score_final)
 
     def generer_recommandations(self) -> str:
-        """Génère des recommandations basées sur les réponses et diagnostics"""
+        """Génère des recommandations personnalisées basées sur les réponses et diagnostics"""
         recommandations = []
+        problemes_detectes = []
 
-        # Analyser les diagnostics système
+        # Analyser les diagnostics système avec recommandations spécifiques
         diagnostics = DiagnosticSysteme.objects.filter(session=self.session)
 
         for diagnostic in diagnostics:
             if diagnostic.statut == 'erreur':
                 if diagnostic.type_diagnostic == 'memoire':
-                    recommandations.append("• Fermez les applications non nécessaires pour libérer de la mémoire")
-                    recommandations.append("• Redémarrez votre ordinateur si le problème persiste")
-                elif diagnostic.type_diagnostic == 'disque':
-                    recommandations.append("• Libérez de l'espace disque en supprimant les fichiers temporaires")
-                    recommandations.append("• Videz la corbeille et nettoyez le cache des navigateurs")
-                elif diagnostic.type_diagnostic == 'reseau':
-                    recommandations.append("• Vérifiez votre connexion Internet")
-                    recommandations.append("• Redémarrez votre modem/routeur")
-                elif diagnostic.type_diagnostic == 'services':
-                    recommandations.append("• Contactez un technicien pour redémarrer les services Windows")
+                    utilisation = diagnostic.resultat.get('utilisation_pourcentage', 0)
+                    if utilisation > 90:
+                        recommandations.append(f"• Mémoire critique ({utilisation}% utilisée)")
+                        recommandations.append("  → Fermez immédiatement les applications non nécessaires")
+                        recommandations.append("  → Redémarrez votre ordinateur pour libérer la mémoire")
+                        problemes_detectes.append("memoire_critique")
+                    elif utilisation > 80:
+                        recommandations.append(f"• Mémoire élevée ({utilisation}% utilisée)")
+                        recommandations.append("  → Fermez les applications gourmandes en mémoire")
 
-        # Analyser les réponses du questionnaire
+                elif diagnostic.type_diagnostic == 'disque':
+                    disques_pleins = []
+                    for disque in diagnostic.resultat.get('disques', []):
+                        if disque.get('pourcentage', 0) > 90:
+                            disques_pleins.append(f"{disque.get('mountpoint', 'N/A')} ({disque.get('pourcentage', 0)}%)")
+
+                    if disques_pleins:
+                        recommandations.append(f"• Disque(s) presque plein(s): {', '.join(disques_pleins)}")
+                        recommandations.append("  → Supprimez les fichiers temporaires et la corbeille")
+                        recommandations.append("  → Désinstallez les programmes inutiles")
+                        recommandations.append("  → Déplacez vos fichiers vers un disque externe")
+                        problemes_detectes.append("disque_plein")
+
+                elif diagnostic.type_diagnostic == 'reseau':
+                    if not diagnostic.resultat.get('internet', True):
+                        recommandations.append("• Pas de connexion Internet détectée")
+                        recommandations.append("  → Vérifiez que votre câble Ethernet est branché")
+                        recommandations.append("  → Redémarrez votre modem/routeur (débranchez 30 secondes)")
+                        recommandations.append("  → Contactez votre fournisseur Internet si le problème persiste")
+                        problemes_detectes.append("reseau_indisponible")
+                    else:
+                        recommandations.append("• Problème de connectivité réseau")
+                        recommandations.append("  → Testez votre connexion avec un autre appareil")
+                        recommandations.append("  → Redémarrez votre ordinateur")
+
+                elif diagnostic.type_diagnostic == 'cpu':
+                    utilisation = diagnostic.resultat.get('utilisation_pourcentage', 0)
+                    if utilisation > 90:
+                        recommandations.append(f"• Processeur surchargé ({utilisation}% d'utilisation)")
+                        recommandations.append("  → Ouvrez le Gestionnaire des tâches (Ctrl+Shift+Échap)")
+                        recommandations.append("  → Arrêtez les processus qui consomment le plus")
+                        recommandations.append("  → Redémarrez si nécessaire")
+                        problemes_detectes.append("cpu_surcharge")
+
+                elif diagnostic.type_diagnostic == 'services':
+                    services_arretes = diagnostic.resultat.get('problemes', [])
+                    if services_arretes:
+                        recommandations.append("• Services Windows critiques arrêtés")
+                        for probleme in services_arretes[:3]:  # Limiter à 3 pour ne pas surcharger
+                            recommandations.append(f"  → {probleme}")
+                        recommandations.append("  → Contactez le support technique pour redémarrer ces services")
+                        problemes_detectes.append("services_arretes")
+
+                elif diagnostic.type_diagnostic == 'logiciels':
+                    processus_gourmands = diagnostic.resultat.get('processus_gourmands', [])
+                    if processus_gourmands:
+                        top_processus = processus_gourmands[0]  # Le plus gourmand
+                        if top_processus.get('cpu', 0) > 50:
+                            nom_processus = top_processus.get('nom', 'Processus inconnu')
+                            cpu_usage = top_processus.get('cpu', 0)
+                            recommandations.append(f"• Le logiciel '{nom_processus}' consomme beaucoup de ressources ({cpu_usage}% CPU)")
+
+                            # Recommandations spécifiques selon le processus
+                            if 'chrome' in nom_processus.lower() or 'firefox' in nom_processus.lower():
+                                recommandations.append("  → Fermez les onglets inutiles de votre navigateur")
+                                recommandations.append("  → Redémarrez votre navigateur")
+                            elif 'office' in nom_processus.lower() or 'word' in nom_processus.lower() or 'excel' in nom_processus.lower():
+                                recommandations.append("  → Fermez les documents Office non utilisés")
+                                recommandations.append("  → Redémarrez l'application Office")
+                            else:
+                                recommandations.append(f"  → Fermez '{nom_processus}' si vous n'en avez pas besoin")
+                                recommandations.append("  → Redémarrez l'application si nécessaire")
+                            problemes_detectes.append("logiciel_gourmand")
+
+                        # Détecter spécifiquement les applications qui utilisent plus de 15% de RAM
+                        applications_ram_elevees = [
+                            app for app in processus_gourmands
+                            if app.get('memory_percent', 0) > 15
+                        ]
+
+                        if applications_ram_elevees:
+                            recommandations.append("• Applications consommant beaucoup de mémoire RAM détectées :")
+                            for app in applications_ram_elevees[:5]:  # Top 5 des plus gourmandes en RAM
+                                nom = app.get('nom', 'Processus inconnu')
+                                mem_percent = app.get('memory_percent', 0)
+                                mem_mb = app.get('memory_mb', 0)
+
+                                recommandations.append(f"  🔴 {nom} utilise {mem_percent:.1f}% de RAM ({mem_mb} MB)")
+
+                                # Recommandations spécifiques selon l'application
+                                nom_lower = nom.lower()
+                                if 'chrome' in nom_lower or 'firefox' in nom_lower or 'edge' in nom_lower:
+                                    recommandations.append("     → Fermez les onglets inutiles du navigateur")
+                                    recommandations.append("     → Utilisez moins d'extensions")
+                                elif 'office' in nom_lower or 'word' in nom_lower or 'excel' in nom_lower:
+                                    recommandations.append("     → Fermez les documents Office volumineux")
+                                    recommandations.append("     → Redémarrez l'application Office")
+                                elif 'photoshop' in nom_lower or 'illustrator' in nom_lower or 'premiere' in nom_lower:
+                                    recommandations.append("     → Fermez Adobe si vous ne l'utilisez pas")
+                                    recommandations.append("     → Réduisez la taille de l'historique d'annulation")
+                                elif 'teams' in nom_lower:
+                                    recommandations.append("     → Quittez Microsoft Teams si non nécessaire")
+                                    recommandations.append("     → Désactivez le démarrage automatique")
+                                elif 'spotify' in nom_lower or 'discord' in nom_lower:
+                                    recommandations.append("     → Fermez l'application si elle n'est pas utilisée")
+                                elif 'steam' in nom_lower or 'epic' in nom_lower:
+                                    recommandations.append("     → Fermez le launcher de jeux si inutilisé")
+                                else:
+                                    recommandations.append(f"     → Fermez '{nom}' pour libérer de la mémoire")
+                                    recommandations.append("     → Redémarrez l'application si nécessaire")
+
+                            recommandations.append("")
+                            recommandations.append("  ATTENTION: Ces applications consomment beaucoup de mémoire RAM")
+                            recommandations.append("  → Votre ordinateur peut être ralenti par ces logiciels")
+                            recommandations.append("  → Fermez ceux que vous n'utilisez pas actuellement")
+                            recommandations.append("  → Redémarrez votre PC si nécessaire pour libérer la mémoire")
+                            problemes_detectes.append("applications_ram_elevees")
+
+                    processus_suspects = diagnostic.resultat.get('processus_suspects', [])
+                    if processus_suspects:
+                        recommandations.append("• Processus suspects détectés")
+                        recommandations.append("  → Lancez immédiatement un scan antivirus complet")
+                        recommandations.append("  → Contactez le support informatique URGENT")
+                        problemes_detectes.append("processus_suspect")
+
+                elif diagnostic.type_diagnostic == 'securite':
+                    problemes_securite = diagnostic.resultat.get('problemes', [])
+                    for probleme in problemes_securite:
+                        if 'antivirus' in probleme.lower():
+                            recommandations.append("• Antivirus désactivé ou non fonctionnel")
+                            recommandations.append("  → Activez Windows Defender ou votre antivirus")
+                            recommandations.append("  → Lancez une analyse complète du système")
+                        elif 'mise' in probleme.lower():
+                            recommandations.append("• Mises à jour système manquantes")
+                            recommandations.append("  → Allez dans Paramètres > Windows Update")
+                            recommandations.append("  → Installez toutes les mises à jour disponibles")
+                    problemes_detectes.append("securite_compromise")
+
+                elif diagnostic.type_diagnostic == 'performance':
+                    score = diagnostic.resultat.get('score_performance', 100)
+                    if score < 60:
+                        recommandations.append(f"• Performances dégradées (Score: {score}/100)")
+
+                        # Analyser les causes spécifiques
+                        temps_disque = diagnostic.resultat.get('temps_test_disque')
+                        if temps_disque and temps_disque > 2:
+                            recommandations.append("  → Votre disque dur est lent, envisagez un SSD")
+                            recommandations.append("  → Défragmentez votre disque dur")
+
+                        uptime = diagnostic.resultat.get('uptime_hours', 0)
+                        if uptime > 168:  # Plus d'une semaine
+                            recommandations.append(f"  → Votre PC fonctionne depuis {int(uptime)}h, redémarrez-le")
+
+                        # Afficher les applications gourmandes détectées
+                        applications_gourmandes = diagnostic.resultat.get('applications_gourmandes', [])
+                        if applications_gourmandes:
+                            recommandations.append("")
+                            recommandations.append("Applications consommant le plus de ressources :")
+
+                            for i, app in enumerate(applications_gourmandes[:5], 1):  # Top 5 seulement
+                                nom = app.get('nom', 'Processus inconnu')
+                                cpu = app.get('cpu_percent', 0)
+                                mem = app.get('memory_percent', 0)
+                                mem_mb = app.get('memory_mb', 0)
+                                impact = app.get('impact_performance', 'moyen')
+
+                                # Indicateur selon l'impact ET spécial pour RAM élevée
+                                if mem > 15:
+                                    indicateur = "(RAM ÉLEVÉE)"
+                                elif impact == 'elevé':
+                                    indicateur = "(ÉLEVÉ)"
+                                else:
+                                    indicateur = "(MOYEN)"
+
+                                recommandations.append(f"  {indicateur} {i}. {nom}")
+                                recommandations.append(f"     CPU: {cpu}% | RAM: {mem}% ({mem_mb} MB)")
+
+                                # Conseils spécifiques selon l'application avec focus sur la RAM
+                                nom_lower = nom.lower()
+                                if mem > 15:  # Priorité aux recommandations RAM
+                                    if 'chrome' in nom_lower or 'firefox' in nom_lower or 'edge' in nom_lower:
+                                        recommandations.append("     → Votre navigateur utilise trop de RAM, fermez les onglets")
+                                    elif 'office' in nom_lower or 'word' in nom_lower or 'excel' in nom_lower or 'powerpoint' in nom_lower:
+                                        recommandations.append("     → Office consomme trop de mémoire, redémarrez l'application")
+                                    elif 'teams' in nom_lower:
+                                        recommandations.append("     → Teams utilise trop de RAM, quittez si non nécessaire")
+                                    elif 'photoshop' in nom_lower or 'illustrator' in nom_lower:
+                                        recommandations.append("     → Adobe consomme beaucoup de RAM, fermez si inutilisé")
+                                    else:
+                                        recommandations.append(f"     → '{nom}' utilise trop de mémoire, fermez-le")
+                                elif 'chrome' in nom_lower or 'firefox' in nom_lower or 'edge' in nom_lower:
+                                    recommandations.append("     → Fermez les onglets inutiles du navigateur")
+                                elif 'office' in nom_lower or 'word' in nom_lower or 'excel' in nom_lower or 'powerpoint' in nom_lower:
+                                    recommandations.append("     → Fermez les documents Office non utilisés")
+                                    recommandations.append("     → Redémarrez l'application Office")
+                                elif 'teams' in nom_lower:
+                                    recommandations.append("     → Quittez Microsoft Teams si non nécessaire")
+                                elif 'outlook' in nom_lower:
+                                    recommandations.append("     → Redémarrez Outlook ou réduisez les emails en cache")
+                                elif 'photoshop' in nom_lower or 'illustrator' in nom_lower:
+                                    recommandations.append("     → Fermez Adobe si vous ne l'utilisez pas")
+                                elif 'zoom' in nom_lower or 'skype' in nom_lower:
+                                    recommandations.append("     → Fermez l'application de visioconférence")
+                                elif 'spotify' in nom_lower or 'vlc' in nom_lower:
+                                    recommandations.append("     → Pausez ou fermez l'application multimédia")
+                                elif impact == 'elevé':
+                                    recommandations.append(f"     → Fermez '{nom}' si vous ne l'utilisez pas")
+                                    recommandations.append("     → Redémarrez l'application si nécessaire")
+
+                            recommandations.append("")
+                            apps_critiques = [app for app in applications_gourmandes if app.get('impact_performance') == 'elevé']
+                            apps_ram_elevees = [app for app in applications_gourmandes if app.get('memory_percent', 0) > 15]
+
+                            if apps_ram_elevees:
+                                recommandations.append(f"🔴 ALERTE MÉMOIRE: {len(apps_ram_elevees)} application(s) utilisent plus de 15% de RAM")
+                                recommandations.append("  → Votre système est ralenti par une consommation excessive de mémoire")
+                                recommandations.append("  → Fermez ces applications ou redémarrez votre PC immédiatement")
+                            elif apps_critiques:
+                                recommandations.append(f"ATTENTION: {len(apps_critiques)} application(s) ont un impact élevé sur les performances")
+                                recommandations.append("  → Votre système est lent car ces logiciels consomment beaucoup")
+                                recommandations.append("  → Veuillez les arrêter ou redémarrer votre PC si nécessaire")
+
+                        recommandations.append("  → Nettoyez les fichiers temporaires")
+                        recommandations.append("  → Désactivez les programmes au démarrage inutiles")
+                        problemes_detectes.append("performance_degradee")
+
+                    # Même si les performances sont acceptables, montrer les apps gourmandes en RAM
+                    elif diagnostic.statut == 'avertissement':
+                        applications_gourmandes = diagnostic.resultat.get('applications_gourmandes', [])
+                        if applications_gourmandes:
+                            apps_ram_elevees = [app for app in applications_gourmandes if app.get('memory_percent', 0) > 15]
+
+                            if apps_ram_elevees:
+                                recommandations.append("")
+                                recommandations.append("Applications utilisant beaucoup de mémoire RAM détectées :")
+                                for app in apps_ram_elevees[:3]:  # Top 3 des plus gourmandes en RAM
+                                    nom = app.get('nom', 'Processus inconnu')
+                                    mem = app.get('memory_percent', 0)
+                                    mem_mb = app.get('memory_mb', 0)
+                                    recommandations.append(f"  🔴 {nom} (RAM: {mem:.1f}% - {mem_mb} MB)")
+
+                                    # Conseil spécifique
+                                    nom_lower = nom.lower()
+                                    if 'chrome' in nom_lower or 'firefox' in nom_lower:
+                                        recommandations.append("     → Votre navigateur utilise trop de RAM, fermez les onglets inutiles")
+                                    elif 'office' in nom_lower:
+                                        recommandations.append("     → Office consomme beaucoup de mémoire, redémarrez l'application")
+                                    else:
+                                        recommandations.append(f"     → '{nom}' utilise trop de mémoire, veuillez l'arrêter")
+
+                                recommandations.append("  → Ces applications ralentissent votre ordinateur")
+                                recommandations.append("  → Fermez-les ou redémarrez votre PC pour libérer la mémoire")
+                            else:
+                                apps_critiques = [app for app in applications_gourmandes if app.get('impact_performance') == 'elevé']
+                                if apps_critiques:
+                                    recommandations.append("")
+                                    recommandations.append("Applications gourmandes détectées :")
+                                    for app in apps_critiques[:3]:  # Top 3 des plus critiques
+                                        nom = app.get('nom', 'Processus inconnu')
+                                        cpu = app.get('cpu_percent', 0)
+                                        mem = app.get('memory_percent', 0)
+                                        recommandations.append(f"  (ELEVÉ) {nom} (CPU: {cpu}%, RAM: {mem}%)")
+
+                                        # Conseil spécifique
+                                        nom_lower = nom.lower()
+                                        if 'chrome' in nom_lower or 'firefox' in nom_lower:
+                                            recommandations.append("     → Votre navigateur est lent, fermez les onglets inutiles")
+                                        elif 'office' in nom_lower:
+                                            recommandations.append("     → Office consomme beaucoup, redémarrez l'application")
+                                        else:
+                                            recommandations.append(f"     → Votre système est ralenti par '{nom}', veuillez l'arrêter")
+
+                                    recommandations.append("  → Si vous ne pouvez pas arrêter ces applications, redémarrez votre PC")
+
+            elif diagnostic.statut == 'avertissement':
+                # Recommandations pour les avertissements (moins urgentes)
+                if diagnostic.type_diagnostic == 'memoire':
+                    utilisation = diagnostic.resultat.get('utilisation_pourcentage', 0)
+                    recommandations.append(f"• Utilisation mémoire élevée ({utilisation}%)")
+                    recommandations.append("  → Surveillez votre utilisation de mémoire")
+                elif diagnostic.type_diagnostic == 'disque':
+                    recommandations.append("• Espace disque limité")
+                    recommandations.append("  → Prévoyez un nettoyage de vos fichiers")
+
+        # Analyser les réponses du questionnaire pour des recommandations spécifiques
         reponses = ReponseDiagnostic.objects.filter(session=self.session)
 
         for reponse in reponses:
             if reponse.score_criticite >= 8:
-                if reponse.question.est_critique:
-                    recommandations.append(f"• Problème critique détecté : {reponse.question.titre}")
-                    recommandations.append("• Contactez immédiatement le support technique")
+                question_titre = reponse.question.titre.lower()
 
-        # Appliquer les règles de diagnostic
+                # Recommandations basées sur les questions critiques
+                if 'allume' in question_titre or 'démarre' in question_titre:
+                    choix_selectionnes = [c.valeur for c in reponse.choix_selectionnes.all()]
+                    if 'non' in choix_selectionnes:
+                        recommandations.append("• Ordinateur ne démarre pas")
+                        recommandations.append("  → Vérifiez que l'alimentation est branchée")
+                        recommandations.append("  → Appuyez fermement sur le bouton power")
+                        recommandations.append("  → Contactez le support technique si rien ne se passe")
+                    elif 'intermittent' in choix_selectionnes:
+                        recommandations.append("• Démarrage intermittent")
+                        recommandations.append("  → Problème d'alimentation possible")
+                        recommandations.append("  → Contactez le support technique rapidement")
+
+                elif 'bruit' in question_titre:
+                    choix_selectionnes = [c.valeur for c in reponse.choix_selectionnes.all()]
+                    if 'disque_bruit' in choix_selectionnes:
+                        recommandations.append("• Bruits suspects du disque dur")
+                        recommandations.append("  → SAUVEGARDEZ VOS DONNÉES IMMÉDIATEMENT")
+                        recommandations.append("  → Contactez le support technique URGENT")
+                        recommandations.append("  → Ne forcez pas l'arrêt de l'ordinateur")
+
+                elif 'écran' in question_titre or 'affichage' in question_titre:
+                    choix_selectionnes = [c.valeur for c in reponse.choix_selectionnes.all()]
+                    if 'noir' in choix_selectionnes:
+                        recommandations.append("• Écran noir")
+                        recommandations.append("  → Vérifiez le câble d'alimentation de l'écran")
+                        recommandations.append("  → Vérifiez le câble vidéo (HDMI/VGA)")
+                        recommandations.append("  → Testez avec un autre écran si possible")
+
+                elif 'internet' in question_titre or 'wifi' in question_titre:
+                    choix_selectionnes = [c.valeur for c in reponse.choix_selectionnes.all()]
+                    if 'non' in choix_selectionnes or 'aucun' in choix_selectionnes:
+                        if 'internet' not in problemes_detectes:  # Éviter les doublons
+                            recommandations.append("• Pas d'accès Internet")
+                            recommandations.append("  → Vérifiez l'icône Wi-Fi dans la barre des tâches")
+                            recommandations.append("  → Reconnectez-vous au Wi-Fi de l'entreprise")
+
+                elif 'email' in question_titre or 'messagerie' in question_titre:
+                    choix_selectionnes = [c.valeur for c in reponse.choix_selectionnes.all()]
+                    if 'impossible' in choix_selectionnes or 'aucun' in choix_selectionnes:
+                        recommandations.append("• Problème de messagerie")
+                        recommandations.append("  → Redémarrez Outlook ou votre client email")
+                        recommandations.append("  → Vérifiez vos paramètres de compte")
+                        recommandations.append("  → Contactez le support si le problème persiste")
+
+                elif 'logiciel' in question_titre or 'application' in question_titre:
+                    # Analyser la réponse textuelle pour identifier le logiciel
+                    texte_reponse = reponse.reponse_texte or ''
+                    choix_selectionnes = [c.valeur for c in reponse.choix_selectionnes.all()]
+
+                    if 'office' in choix_selectionnes:
+                        recommandations.append("• Problème avec Microsoft Office")
+                        recommandations.append("  → Redémarrez l'application Office concernée")
+                        recommandations.append("  → Réparez l'installation Office via Panneau de configuration")
+                    elif 'navigateur' in choix_selectionnes:
+                        recommandations.append("• Problème de navigateur web")
+                        recommandations.append("  → Videz le cache et les cookies")
+                        recommandations.append("  → Désactivez temporairement les extensions")
+                        recommandations.append("  → Redémarrez le navigateur")
+                    elif 'windows' in choix_selectionnes:
+                        recommandations.append("• Problème système Windows")
+                        recommandations.append("  → Redémarrez l'ordinateur")
+                        recommandations.append("  → Vérifiez les mises à jour Windows")
+                        recommandations.append("  → Contactez le support technique")
+
+        # Appliquer les règles de diagnostic avec messages personnalisés
         regles = RegleDiagnostic.objects.filter(
             categorie=self.session.categorie,
             est_active=True
         )
 
         for regle in regles:
-            if self.evaluer_regle(regle, reponses, diagnostics):
-                recommandations.append(f"• {regle.message_utilisateur}")
+            try:
+                if self._evaluer_regle(regle, reponses, diagnostics):
+                    # Ajouter les recommandations de la règle
+                    message_regle = regle.description or f"Règle appliquée: {regle.nom}"
+                    recommandations.append(f"• {message_regle}")
+            except Exception as e:
+                logger.error(f"Erreur lors de l'évaluation de la règle {regle.nom}: {e}")
+                continue
 
-        if not recommandations:
-            recommandations.append("• Aucun problème critique détecté")
-            recommandations.append("• Surveillez votre système et contactez le support si nécessaire")
-
-        return "\n".join(recommandations)
-
-    @staticmethod
-    def evaluer_regle(regle: RegleDiagnostic, reponses, diagnostics) -> bool:
-        """Évalue si une règle de diagnostic doit être appliquée"""
-        # Implémentation basique - peut être étendue
-        conditions = regle.conditions
-
-        # Exemple de condition:
-        # {
-        #   "score_minimum": 15,
-        #   "diagnostic_erreur": ["memoire", "disque"]
-        # }
-
-        if 'score_minimum' in conditions:
+        # Recommandations générales si pas de problèmes critiques
+        if not any(p in problemes_detectes for p in ['memoire_critique', 'cpu_surcharge', 'disque_plein', 'processus_suspect']):
+            # Calculer le score global
             score_total = sum(r.score_criticite for r in reponses)
-            if score_total < conditions['score_minimum']:
-                return False
 
-        if 'diagnostic_erreur' in conditions:
-            types_erreur = [d.type_diagnostic for d in diagnostics if d.statut == 'erreur']
-            if not any(t in types_erreur for t in conditions['diagnostic_erreur']):
-                return False
+            if score_total < 5:
+                recommandations.insert(0, "Votre système semble fonctionner correctement")
+                recommandations.append("• Conseils préventifs :")
+                recommandations.append("  → Redémarrez votre PC au moins une fois par semaine")
+                recommandations.append("  → Maintenez vos logiciels à jour")
+                recommandations.append("  → Sauvegardez régulièrement vos documents importants")
+            elif score_total < 15:
+                recommandations.insert(0, "Quelques problèmes mineurs détectés")
+                recommandations.append("• Actions recommandées :")
+                recommandations.append("  → Surveillez les performances de votre système")
+                recommandations.append("  → Appliquez les recommandations ci-dessus")
+            else:
+                recommandations.insert(0, "Plusieurs problèmes nécessitent votre attention")
 
-        return True
+        # Ajouter des recommandations de contact selon la gravité
+        if any(p in problemes_detectes for p in ['processus_suspect', 'disque_bruit']):
+            recommandations.append("")
+            recommandations.append("CONTACT URGENT RECOMMANDÉ")
+            recommandations.append("Appelez le support technique immédiatement")
+        elif any(p in problemes_detectes for p in ['memoire_critique', 'cpu_surcharge', 'services_arretes']):
+            recommandations.append("")
+            recommandations.append("Contact support technique recommandé dans les 24h")
+        elif len(problemes_detectes) > 0:
+            recommandations.append("")
+            recommandations.append("N'hésitez pas à contacter le support si vous avez des questions")
+
+        # S'assurer qu'il y a toujours des recommandations
+        if not recommandations:
+            recommandations.append("✅ Aucun problème critique détecté")
+            recommandations.append("• Votre système fonctionne normalement")
+            recommandations.append("• Continuez à surveiller les performances")
+            recommandations.append("• Contactez le support si vous rencontrez des difficultés")
+
+        # Retourner une chaîne non vide
+        result = "\n".join(recommandations)
+        return result if result else "Diagnostic complété. Aucune recommandation spécifique nécessaire."
+
+    def _evaluer_regle(self, regle: RegleDiagnostic, reponses: List[ReponseDiagnostic],
+                      diagnostics: List[DiagnosticSysteme]) -> bool:
+        """Évalue si une règle de diagnostic doit être appliquée"""
+        try:
+            conditions = regle.conditions or {}
+
+            # Exemple de logique d'évaluation basique
+            if 'score_minimum' in conditions:
+                score_total = sum(r.score_criticite for r in reponses)
+                return score_total >= conditions['score_minimum']
+
+            if 'diagnostic_statut' in conditions:
+                statuts_requis = conditions['diagnostic_statut']
+                diagnostics_avec_statut = [d for d in diagnostics if d.statut in statuts_requis]
+                return len(diagnostics_avec_statut) > 0
+
+            # Si aucune condition spécifique, appliquer la règle
+            return True
+
+        except Exception as e:
+            logger.error(f"Erreur lors de l'évaluation de la règle {regle.nom}: {e}")
+            return False
+

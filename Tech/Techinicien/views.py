@@ -5,10 +5,12 @@ from rest_framework import status, permissions, generics
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework_simplejwt.views import TokenObtainPairView
-from rest_framework.permissions import IsAuthenticated
-from django.db.models import Q
+from rest_framework.permissions import IsAuthenticated, BasePermission
+from django.db.models import Q, Count, F, Avg
+from django.db.models.functions import ExtractMonth, ExtractYear, ExtractDay, TruncDate
+from django.utils import timezone
 from .models import Ticket, Categorie, Equipement, Departement, SessionDiagnostic, TemplateDiagnostic, \
-    DiagnosticSysteme, HistoriqueDiagnostic, QuestionDiagnostic, Commentaire
+    DiagnosticSysteme, HistoriqueDiagnostic, QuestionDiagnostic, Commentaire, ReponseDiagnostic, CustomUser
 from .serializers import (
     UserRegistrationSerializer,
     CustomTokenObtainPairSerializer,
@@ -790,6 +792,27 @@ class SessionDiagnosticCreateView(APIView):
 
     @staticmethod
     def post(request):
+        # Vérifier s'il existe déjà une session récente pour l'utilisateur et la catégorie
+        categorie_id = request.data.get('categorie')
+        user = request.user
+
+        if categorie_id:
+            # Chercher une session existante en cours ou en pause
+            session_existante = SessionDiagnostic.objects.filter(
+                utilisateur=user,
+                categorie_id=categorie_id,
+                statut__in=['en_cours', 'en_pause']
+            ).first()
+
+            if session_existante:
+                # Retourner les informations de la session existante avec les données système
+                return Response({
+                    'session_id': session_existante.id,
+                    'message': 'Session de diagnostic existante reprise',
+                    'session_existante': True,
+                    'diagnostic_automatique': session_existante.diagnostic_automatique
+                }, status=status.HTTP_200_OK)
+
         serializer = SessionDiagnosticCreateSerializer(
             data=request.data,
             context={'request': request}
@@ -797,14 +820,19 @@ class SessionDiagnosticCreateView(APIView):
         if serializer.is_valid():
             session = serializer.save()
 
-            # Lancer le diagnostic système automatique
+            # Lancer le diagnostic système automatique et attendre qu'il se termine
             from .diagnostic_engine import DiagnosticSystemeEngine
             diagnostic_engine = DiagnosticSystemeEngine(session)
             diagnostic_engine.executer_diagnostic_complet()
 
+            # Recharger la session pour avoir les données à jour
+            session.refresh_from_db()
+
             return Response({
                 'session_id': session.id,
-                'message': 'Session de diagnostic créée avec succès'
+                'message': 'Session de diagnostic créée avec succès',
+                'session_existante': False,
+                'diagnostic_automatique': session.diagnostic_automatique
             }, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -1703,3 +1731,458 @@ class PasserEtapeView(APIView):
                 status=status.HTTP_404_NOT_FOUND
             )
 
+
+class IsTechnician(BasePermission):
+    """Permission personnalisée pour vérifier si l'utilisateur est un technicien"""
+    def has_permission(self, request, view):
+        return request.user.role == 'technicien'
+
+class IsEmployee(BasePermission):
+    """Permission personnalisée pour vérifier si l'utilisateur est un employé"""
+    def has_permission(self, request, view):
+        return request.user.role == 'employe'
+
+class DashboardDataView(APIView):
+    """Vue pour fournir les données du tableau de bord"""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        
+        # Données communes
+        current_year = timezone.now().year
+        current_month = timezone.now().month
+        
+        # Données spécifiques au rôle
+        if user.role == 'technicien':
+            return self.get_technician_dashboard(user, current_year, current_month)
+        elif user.role == 'admin':
+            return self.get_admin_dashboard(user, current_year, current_month)
+        else:
+            return self.get_employee_dashboard(user, current_year, current_month)
+    
+    def get_employee_dashboard(self, user, current_year, current_month):
+        """Récupère les données du tableau de bord pour un employé"""
+        # Tickets de l'employé
+        user_tickets = Ticket.objects.filter(utilisateur_createur=user).order_by('-date_creation')
+        
+        # Statistiques temporelles
+        today = timezone.now().date()
+        tickets_today = user_tickets.filter(date_creation__date=today).count()
+        tickets_this_month = user_tickets.filter(
+            date_creation__year=current_year,
+            date_creation__month=current_month
+        ).count()
+        tickets_this_year = user_tickets.filter(date_creation__year=current_year).count()
+
+        # Statistiques par statut
+        tickets_by_status = user_tickets.values('statut_ticket').annotate(
+            count=Count('id')
+        ).order_by('statut_ticket')
+        
+        # Formater les données pour le graphique des statuts
+        status_display_map = dict(Ticket.STATUT_TICKET_CHOICES)
+        status_data = [
+            {
+                'name': status_display_map.get(item['statut_ticket'], item['statut_ticket']),
+                'value': item['count']
+            }
+            for item in tickets_by_status
+        ]
+
+        # Statistiques par priorité
+        tickets_by_priority = user_tickets.values('priorite').annotate(
+            count=Count('id')
+        ).order_by('priorite')
+
+        # Formater les données pour le graphique des priorités
+        priority_display_map = dict(Ticket.PRIORITE_CHOICES)
+        priority_data = [
+            {
+                'name': priority_display_map.get(item['priorite'], item['priorite']),
+                'value': item['count']
+            }
+            for item in tickets_by_priority
+        ]
+
+        # Statistiques par catégorie pour les 6 derniers mois
+        six_months_ago = timezone.now() - timedelta(days=180)
+        tickets_by_category_month = user_tickets.filter(
+            date_creation__gte=six_months_ago
+        ).annotate(
+            month=ExtractMonth('date_creation'),
+            year=ExtractYear('date_creation')
+        ).values(
+            'month', 'year', 'categorie__nom_categorie'
+        ).annotate(
+            count=Count('id')
+        ).order_by('year', 'month')
+
+        # Organiser les données par mois pour le graphique
+        category_data = {}
+        for item in tickets_by_category_month:
+            month_key = f"{self.get_month_name(item['month'])} {item['year']}"
+            if month_key not in category_data:
+                category_data[month_key] = {'name': month_key}
+            category_data[month_key][item['categorie__nom_categorie']] = item['count']
+
+        # Derniers tickets
+        recent_tickets = TicketListSerializer(
+            user_tickets[:5], 
+            many=True, 
+            context={'request': self.request}
+        ).data
+        
+        # Temps moyen de résolution de mes tickets
+        resolved_tickets = user_tickets.filter(statut_ticket='resolu')
+        avg_resolution_time = 0
+        if resolved_tickets.exists():
+            resolution_times = []
+            for ticket in resolved_tickets:
+                if ticket.date_modification:
+                    resolution_time = (ticket.date_modification - ticket.date_creation).total_seconds() / 3600
+                    resolution_times.append(resolution_time)
+
+            if resolution_times:
+                avg_resolution_time = sum(resolution_times) / len(resolution_times)
+
+        # Statistiques de satisfaction (si applicable)
+        tickets_resolved_this_month = user_tickets.filter(
+            statut_ticket='resolu',
+            date_modification__year=current_year,
+            date_modification__month=current_month
+        ).count()
+
+        return Response({
+            'user_info': {
+                'name': user.get_full_name() or user.email,
+                'role': user.get_role_display(),
+                'department': user.departement.nom_departement if user.departement else 'Non spécifié'
+            },
+            'stats': {
+                'total_tickets': user_tickets.count(),
+                'tickets_today': tickets_today,
+                'tickets_this_month': tickets_this_month,
+                'tickets_this_year': tickets_this_year,
+                'tickets_resolved_this_month': tickets_resolved_this_month,
+                'avg_resolution_time_hours': round(avg_resolution_time, 1),
+                'tickets_by_status': status_data,
+                'tickets_by_category': list(category_data.values()),
+                'tickets_by_priority': priority_data,
+            },
+            'recent_tickets': recent_tickets,
+            'summary': {
+                'pending_tickets': user_tickets.filter(statut_ticket__in=['ouvert', 'en_cours']).count(),
+                'urgent_tickets': user_tickets.filter(priorite__in=['urgent', 'critique']).count(),
+                'last_ticket_date': user_tickets.first().date_creation if user_tickets.exists() else None
+            }
+        })
+    
+    def get_technician_dashboard(self, user, current_year, current_month):
+        """Récupère les données du tableau de bord pour un technicien"""
+        # Tickets assignés au technicien
+        assigned_tickets = Ticket.objects.filter(technicien_assigne=user)
+        all_tickets = Ticket.objects.all()
+
+        # Statistiques temporelles
+        today = timezone.now().date()
+        tickets_assigned_today = assigned_tickets.filter(date_creation__date=today).count()
+        tickets_resolved_this_month = assigned_tickets.filter(
+            statut_ticket='resolu',
+            date_modification__year=current_year,
+            date_modification__month=current_month
+        ).count()
+        tickets_assigned_this_year = assigned_tickets.filter(date_creation__year=current_year).count()
+
+        # Tickets non assignés (disponibles)
+        unassigned_tickets = all_tickets.filter(technicien_assigne__isnull=True).count()
+
+        # Temps moyen de résolution
+        resolved_tickets = assigned_tickets.filter(statut_ticket='resolu')
+        avg_resolution_time = 0
+        if resolved_tickets.exists():
+            resolution_times = []
+            for ticket in resolved_tickets:
+                if ticket.date_modification:
+                    resolution_time = (ticket.date_modification - ticket.date_creation).total_seconds() / 3600
+                    resolution_times.append(resolution_time)
+
+            if resolution_times:
+                avg_resolution_time = sum(resolution_times) / len(resolution_times)
+
+        # Statistiques par statut (tickets assignés)
+        tickets_by_status = assigned_tickets.values('statut_ticket').annotate(
+            count=Count('id')
+        ).order_by('statut_ticket')
+
+        status_display_map = dict(Ticket.STATUT_TICKET_CHOICES)
+        status_data = [
+            {
+                'name': status_display_map.get(item['statut_ticket'], item['statut_ticket']),
+                'value': item['count']
+            }
+            for item in tickets_by_status
+        ]
+
+        # Statistiques par priorité (tickets assignés)
+        tickets_by_priority = assigned_tickets.values('priorite').annotate(
+            count=Count('id')
+        ).order_by('priorite')
+
+        # Formater les données pour le graphique des priorités
+        priority_display_map = dict(Ticket.PRIORITE_CHOICES)
+        priority_data = [
+            {
+                'name': priority_display_map.get(item['priorite'], item['priorite']),
+                'value': item['count']
+            }
+            for item in tickets_by_priority
+        ]
+
+        # Tickets par catégorie (6 derniers mois) - tous les tickets
+        six_months_ago = timezone.now() - timedelta(days=180)
+        tickets_by_category_month = all_tickets.filter(
+            date_creation__gte=six_months_ago
+        ).annotate(
+            month=ExtractMonth('date_creation'),
+            year=ExtractYear('date_creation')
+        ).values(
+            'month', 'year', 'categorie__nom_categorie'
+        ).annotate(
+            count=Count('id')
+        ).order_by('year', 'month')
+
+        # Organiser les données par mois
+        category_data = {}
+        for item in tickets_by_category_month:
+            month_key = f"{self.get_month_name(item['month'])} {item['year']}"
+            if month_key not in category_data:
+                category_data[month_key] = {'name': month_key}
+            category_data[month_key][item['categorie__nom_categorie']] = item['count']
+
+        # Derniers commentaires sur les tickets assignés
+        recent_comments = Commentaire.objects.filter(
+            Q(ticket__technicien_assigne=user) | Q(utilisateur_auteur=user)
+        ).order_by('-date_commentaire')[:5]
+
+        recent_comments_data = CommentaireSerializer(recent_comments, many=True, context={'request': self.request}).data
+
+        # Tickets récents assignés
+        recent_assigned_tickets = TicketListSerializer(
+            assigned_tickets.order_by('-date_creation')[:5],
+            many=True,
+            context={'request': self.request}
+        ).data
+
+        # Performance du technicien
+        total_assigned = assigned_tickets.count()
+        total_resolved = resolved_tickets.count()
+        resolution_rate = (total_resolved / total_assigned * 100) if total_assigned > 0 else 0
+
+        # Tickets prioritaires assignés
+        urgent_tickets = assigned_tickets.filter(priorite__in=['urgent', 'critique']).count()
+
+        return Response({
+            'user_info': {
+                'name': user.get_full_name() or user.email,
+                'role': user.get_role_display(),
+                'department': user.departement.nom_departement if user.departement else 'Non spécifié'
+            },
+            'stats': {
+                'total_assigned': total_assigned,
+                'tickets_assigned_today': tickets_assigned_today,
+                'tickets_resolved_this_month': tickets_resolved_this_month,
+                'tickets_assigned_this_year': tickets_assigned_this_year,
+                'unassigned_tickets': unassigned_tickets,
+                'avg_resolution_time_hours': round(avg_resolution_time, 1),
+                'resolution_rate': round(resolution_rate, 1),
+                'urgent_tickets': urgent_tickets,
+                'tickets_by_status': status_data,
+                'tickets_by_category': list(category_data.values()),
+                'tickets_by_priority': priority_data,
+            },
+            'recent_tickets': recent_assigned_tickets,
+            'recent_comments': recent_comments_data,
+            'performance': {
+                'total_resolved': total_resolved,
+                'resolution_rate': round(resolution_rate, 1),
+                'avg_resolution_time': round(avg_resolution_time, 1),
+                'tickets_this_month': tickets_resolved_this_month
+            }
+        })
+
+    def get_admin_dashboard(self, user, current_year, current_month):
+        """Récupère les données du tableau de bord pour un administrateur"""
+        all_tickets = Ticket.objects.all()
+
+        # Statistiques temporelles globales
+        today = timezone.now().date()
+        tickets_today = all_tickets.filter(date_creation__date=today).count()
+        tickets_this_month = all_tickets.filter(
+            date_creation__year=current_year,
+            date_creation__month=current_month
+        ).count()
+        tickets_this_year = all_tickets.filter(date_creation__year=current_year).count()
+
+        # Statistiques par statut (tous les tickets)
+        tickets_by_status = all_tickets.values('statut_ticket').annotate(
+            count=Count('id')
+        ).order_by('statut_ticket')
+        
+        status_display_map = dict(Ticket.STATUT_TICKET_CHOICES)
+        status_data = [
+            {
+                'name': status_display_map.get(item['statut_ticket'], item['statut_ticket']),
+                'value': item['count']
+            }
+            for item in tickets_by_status
+        ]
+        
+        # Tickets par catégorie (6 derniers mois)
+        six_months_ago = timezone.now() - timedelta(days=180)
+        tickets_by_category_month = all_tickets.filter(
+            date_creation__gte=six_months_ago
+        ).annotate(
+            month=ExtractMonth('date_creation'),
+            year=ExtractYear('date_creation')
+        ).values(
+            'month', 'year', 'categorie__nom_categorie'
+        ).annotate(
+            count=Count('id')
+        ).order_by('year', 'month')
+
+        # Organiser les données par mois
+        category_data = {}
+        for item in tickets_by_category_month:
+            month_key = f"{self.get_month_name(item['month'])} {item['year']}"
+            if month_key not in category_data:
+                category_data[month_key] = {'name': month_key}
+            category_data[month_key][item['categorie__nom_categorie']] = item['count']
+
+        # Statistiques des techniciens
+        technician_stats = CustomUser.objects.filter(role='technicien', statut='actif').annotate(
+            assigned_tickets=Count('tickets_assignes'),
+            resolved_tickets=Count('tickets_assignes', filter=Q(tickets_assignes__statut_ticket='resolu'))
+        ).values('email', 'first_name', 'last_name', 'assigned_tickets', 'resolved_tickets')
+
+        # Performance globale
+        total_tickets = all_tickets.count()
+        resolved_tickets = all_tickets.filter(statut_ticket='resolu').count()
+        pending_tickets = all_tickets.filter(statut_ticket__in=['ouvert', 'en_cours']).count()
+        urgent_tickets = all_tickets.filter(priorite__in=['urgent', 'critique']).count()
+
+        # Temps moyen de résolution global
+        resolved_tickets_with_time = all_tickets.filter(statut_ticket='resolu', date_modification__isnull=False)
+        avg_resolution_time = 0
+        if resolved_tickets_with_time.exists():
+            resolution_times = []
+            for ticket in resolved_tickets_with_time:
+                resolution_time = (ticket.date_modification - ticket.date_creation).total_seconds() / 3600
+                resolution_times.append(resolution_time)
+
+            if resolution_times:
+                avg_resolution_time = sum(resolution_times) / len(resolution_times)
+
+        # Tickets récents (tous)
+        recent_tickets = TicketListSerializer(
+            all_tickets.order_by('-date_creation')[:10],
+            many=True,
+            context={'request': self.request}
+        ).data
+
+        # Statistiques par département
+        dept_stats = all_tickets.values(
+            'utilisateur_createur__departement__nom_departement'
+        ).annotate(
+            count=Count('id')
+        ).order_by('-count')[:5]
+
+        return Response({
+            'user_info': {
+                'name': user.get_full_name() or user.email,
+                'role': user.get_role_display(),
+                'department': user.departement.nom_departement if user.departement else 'Non spécifié'
+            },
+            'stats': {
+                'total_tickets': total_tickets,
+                'tickets_today': tickets_today,
+                'tickets_this_month': tickets_this_month,
+                'tickets_this_year': tickets_this_year,
+                'resolved_tickets': resolved_tickets,
+                'pending_tickets': pending_tickets,
+                'urgent_tickets': urgent_tickets,
+                'avg_resolution_time_hours': round(avg_resolution_time, 1),
+                'tickets_by_status': status_data,
+                'tickets_by_category': list(category_data.values()),
+            },
+            'recent_tickets': recent_tickets,
+            'technician_performance': list(technician_stats),
+            'department_stats': [
+                {
+                    'department': item['utilisateur_createur__departement__nom_departement'] or 'Non spécifié',
+                    'count': item['count']
+                }
+                for item in dept_stats
+            ],
+            'system_health': {
+                'resolution_rate': round((resolved_tickets / total_tickets * 100) if total_tickets > 0 else 0, 1),
+                'avg_resolution_time': round(avg_resolution_time, 1),
+                'active_technicians': CustomUser.objects.filter(role='technicien', statut='actif').count(),
+                'total_users': CustomUser.objects.filter(statut='actif').count()
+            }
+        })
+    
+    def get_month_name(self, month_number):
+        """Retourne le nom du mois à partir de son numéro"""
+        months = [
+            'Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Juin',
+            'Juil', 'Août', 'Sep', 'Oct', 'Nov', 'Déc'
+        ]
+        return months[month_number - 1] if 1 <= month_number <= 12 else str(month_number)
+
+
+class DiagnosticAnswerView(APIView):
+    """Vue pour soumettre ou mettre à jour une réponse à une question de diagnostic."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, session_id):
+        question_id = request.data.get('question_id')
+        reponse_texte = request.data.get('reponse_texte', '')
+
+        temps_passe = request.data.get('temps_passe', 0)
+        est_incertain = request.data.get('est_incertain', False)
+        commentaire = request.data.get('commentaire', '')
+        donnees_supplementaires = request.data.get('donnees_supplementaires', {})
+
+        # Vérifier que la session et la question existent
+        try:
+            session = SessionDiagnostic.objects.get(id=session_id)
+            question = QuestionDiagnostic.objects.get(id=question_id)
+        except (SessionDiagnostic.DoesNotExist, QuestionDiagnostic.DoesNotExist):
+            return Response({'error': 'Session ou question non trouvée'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Vérifier si une réponse existe déjà
+        reponse, created = ReponseDiagnostic.objects.get_or_create(
+            session=session,
+            question=question,
+            defaults={
+                'reponse_texte': reponse_texte,
+                'score_criticite': score_criticite,
+                'temps_passe': temps_passe,
+                'est_incertain': est_incertain,
+                'commentaire': commentaire,
+                'donnees_supplementaires': donnees_supplementaires,
+            }
+        )
+        if not created:
+            # Mettre à jour la réponse existante
+            reponse.reponse_texte = reponse_texte
+            reponse.score_criticite = score_criticite
+            reponse.temps_passe = temps_passe
+            reponse.est_incertain = est_incertain
+            reponse.commentaire = commentaire
+            reponse.donnees_supplementaires = donnees_supplementaires
+            reponse.save()
+            return Response({'message': 'Réponse mise à jour'}, status=status.HTTP_200_OK)
+        else:
+            return Response({'message': 'Réponse enregistrée'}, status=status.HTTP_201_CREATED)

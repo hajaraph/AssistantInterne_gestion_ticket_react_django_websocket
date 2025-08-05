@@ -5,6 +5,20 @@ class ApiService {
     this.baseURL = API_BASE_URL;
   }
 
+  // Tableau de bord
+  async getDashboardData() {
+    try {
+      const response = await this.request('/dashboard');
+      if (!response.ok) {
+        throw new Error('Erreur lors de la récupération des données du tableau de bord');
+      }
+      return await response.json();
+    } catch (error) {
+      console.error('Erreur getDashboardData:', error);
+      throw error;
+    }
+  }
+
   // Méthode pour effectuer les requêtes HTTP
   async request(endpoint, options = {}) {
     const url = `${this.baseURL}${endpoint}`;

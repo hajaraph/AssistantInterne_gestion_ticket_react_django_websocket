@@ -71,7 +71,7 @@ def auto_assign_urgent_ticket(ticket):
             )
 
             # Envoyer un email de notification urgente au technicien
-            envoyer_email_urgence_technicien(ticket, technicien_assigne)
+            envoyer_email_urgence_technicien_smtp(ticket, technicien_assigne)
 
             return technicien_assigne
     return None
@@ -258,7 +258,7 @@ def envoyer_email_confirmation_employe_sendgrid(ticket):
         logger.error(f"Erreur SendGrid confirmation pour le ticket {ticket.id}: {str(e)}")
         return envoyer_email_confirmation_employe_smtp(ticket)
 
-def envoyer_email_urgence_technicien(ticket, technicien):
+def envoyer_email_urgence_technicien_smtp(ticket, technicien):
     """
     Envoie un email d'urgence au technicien assigné
     """

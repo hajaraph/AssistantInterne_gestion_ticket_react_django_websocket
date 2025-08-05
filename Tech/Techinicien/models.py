@@ -331,8 +331,8 @@ def envoyer_email_creation_ticket(sender, instance, created, **kwargs):
             logger.error(f"Erreur lors de l'envoi des emails pour le ticket {instance.id}: {str(e)}")
 
         # Envoyer notification WebSocket pour les nouveaux tickets
+        channel_layer = get_channel_layer()
         try:
-            channel_layer = get_channel_layer()
             if channel_layer:
                 # Sérialiser le ticket pour l'envoi WebSocket
                 serializer = TicketListSerializer(instance)
@@ -525,7 +525,7 @@ class SessionDiagnostic(models.Model):
     date_completion = models.DateTimeField(null=True, blank=True)
     temps_total_passe = models.PositiveIntegerField(default=0, help_text="Temps total passé sur le diagnostic (en secondes)")
     diagnostic_automatique = models.JSONField(default=dict, blank=True)
-    recommandations = models.TextField(blank=True)
+    recommandations = models.TextField(blank=True, null=True, default='')
     score_confiance = models.FloatField(default=1.0, help_text="Score de confiance dans les réponses (0-1)")
     donnees_supplementaires = models.JSONField(default=dict, blank=True, help_text="Données supplémentaires de la session")
     equipement = models.ForeignKey(Equipement, on_delete=models.SET_NULL, null=True, blank=True, related_name='sessions_diagnostic')
@@ -911,6 +911,10 @@ class DiagnosticSysteme(models.Model):
 @receiver(post_save, sender=SessionDiagnostic)
 def creer_ticket_automatique(sender, instance, created, **kwargs):
     """Crée automatiquement un ticket si le diagnostic indique un problème critique"""
+    # Éviter la boucle infinie : ne pas traiter si c'est juste une mise à jour des données supplémentaires
+    if not created and kwargs.get('update_fields') == ['donnees_supplementaires']:
+        return None
+
     if instance.statut == 'complete' and instance.priorite_estimee in ['urgent', 'critique']:
         # Vérifier si un ticket n'existe pas déjà pour cette session
         if not Ticket.objects.filter(
@@ -931,16 +935,23 @@ def creer_ticket_automatique(sender, instance, created, **kwargs):
                 equipement=instance.equipement
             )
             
-            # Ajouter les données supplémentaires sans l'URL qui pose problème
-            ticket.donnees_supplementaires = {
+            # Ajouter les données supplémentaires
+            ticket_data = {
                 'session_diagnostic_id': instance.id,
                 'score_confiance': float(instance.score_confiance) if instance.score_confiance else 1.0,
                 'date_completion': instance.date_completion.isoformat() if instance.date_completion else None,
                 'type': 'creation_automatique',
                 'source': 'diagnostic_automatique'
             }
-            ticket.save()
-            
+
+            # Utiliser update au lieu de save pour éviter de déclencher le signal
+            SessionDiagnostic.objects.filter(id=instance.id).update(
+                donnees_supplementaires={
+                    **(instance.donnees_supplementaires or {}),
+                    'ticket_automatique_id': ticket.id
+                }
+            )
+
             # Créer un commentaire avec les détails du diagnostic
             Commentaire.objects.create(
                 ticket=ticket,
@@ -951,20 +962,10 @@ def creer_ticket_automatique(sender, instance, created, **kwargs):
                        f"- Score de confiance: {instance.score_confiance:.1%}\n"
                        f"- Date du diagnostic: {instance.date_completion.strftime('%d/%m/%Y %H:%M') if instance.date_completion else 'N/A'}\n"
                        f"- Équipement concerné: {instance.equipement if instance.equipement else 'Aucun équipement spécifié'}",
-                type_action='creation',
-                donnees_supplementaires={
-                    'type': 'creation_automatique',
-                    'source': 'diagnostic_automatique',
-                    'session_id': instance.id,
-                }
+                type_action='creation'
             )
             
             logger.info(f"Ticket automatique créé pour la session de diagnostic {instance.id} (ticket #{ticket.id})")
-            
-            # Mettre à jour la session avec une référence vers le ticket créé
-            instance.donnees_supplementaires = instance.donnees_supplementaires or {}
-            instance.donnees_supplementaires['ticket_automatique_id'] = ticket.id
-            instance.save(update_fields=['donnees_supplementaires'])
             
             return ticket
     return None
@@ -976,6 +977,10 @@ def enregistrer_historique_session(sender, instance, created, **kwargs):
     """Enregistre une entrée d'historique lors de la création ou de la mise à jour d'une session"""
     from django.utils import timezone
     
+    # Éviter la boucle infinie : ne pas traiter les mises à jour des données supplémentaires
+    if not created and kwargs.get('update_fields') == ['donnees_supplementaires']:
+        return
+
     if created:
         # Enregistrer le début de la session
         HistoriqueDiagnostic.objects.create(

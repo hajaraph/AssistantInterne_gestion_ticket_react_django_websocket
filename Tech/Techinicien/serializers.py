@@ -459,16 +459,13 @@ class ReponseDiagnosticCreateSerializer(serializers.ModelSerializer):
             **validated_data
         )
 
-        # Ajouter les choix sélectionnés et calculer le score
-        score_total = 0
+        # Ajouter les choix sélectionnés en utilisant la nouvelle approche
         if choix_ids:
             choix_objets = ChoixReponse.objects.filter(id__in=choix_ids)
-            reponse.choix_selectionnes.set(choix_objets)
-            score_total = sum(choix.score_criticite for choix in choix_objets)
+            for choix in choix_objets:
+                reponse.ajouter_choix(choix)
 
-        reponse.score_criticite = score_total
-        reponse.save()
-
+        # Le score est automatiquement calculé par la méthode ajouter_choix()
         return reponse
 
 
@@ -619,15 +616,13 @@ class ReponseDiagnosticAvanceSerializer(serializers.ModelSerializer):
             **validated_data
         )
 
-        # Ajouter les choix sélectionnés et calculer le score
-        score_total = 0
+        # Ajouter les choix sélectionnés en utilisant la nouvelle approche
         if choix_ids:
             choix_objets = ChoixReponse.objects.filter(id__in=choix_ids)
-            reponse.choix_selectionnes.set(choix_objets)
-            score_total = sum(choix.score_criticite for choix in choix_objets)
+            for choix in choix_objets:
+                reponse.ajouter_choix(choix)
 
-        reponse.score_criticite = score_total
-        reponse.save()
+        # Le score est automatiquement calculé par la méthode ajouter_choix()
 
         # Enregistrer dans l'historique
         from .models import HistoriqueDiagnostic
@@ -638,7 +633,7 @@ class ReponseDiagnosticAvanceSerializer(serializers.ModelSerializer):
             details={
                 'question_id': reponse.question.id,
                 'question_titre': reponse.question.titre,
-                'score_criticite': score_total,
+                'score_criticite': reponse.score_criticite,
                 'temps_passe': validated_data.get('temps_passe', 0),
                 'est_incertain': validated_data.get('est_incertain', False)
             }
