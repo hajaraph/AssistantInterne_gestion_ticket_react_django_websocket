@@ -72,7 +72,12 @@ const DiagnosticEtapes = ({ isOpen, onClose, categoryId, onComplete }) => {
         } else {
           // Diagnostic terminé
           if (onComplete) {
-            onComplete(response.resultat);
+            // Ajouter le session_id au résultat
+            const resultat = {
+              ...response.resultat,
+              session_id: session.id
+            };
+            onComplete(resultat);
           }
         }
 

@@ -645,9 +645,9 @@ class Command(BaseCommand):
     def create_test_users(self, force):
         """Créer des utilisateurs de test"""
         # Créer un utilisateur employé de test
-        if not CustomUser.objects.filter(email='employe.test@entreprise.com').exists():
+        if not CustomUser.objects.filter(email='rahajarisonraphael@gmail.com').exists():
             user = CustomUser.objects.create_user(
-                email='employe.test@entreprise.com',
+                email='rahajarisonraphael@gmail.com',
                 password='test123',
                 first_name='Employé',
                 last_name='Test',
@@ -657,9 +657,9 @@ class Command(BaseCommand):
             self.stdout.write(f'✓ Utilisateur test créé: {user.email}')
 
         # Créer un technicien de test
-        if not CustomUser.objects.filter(email='technicien.test@entreprise.com').exists():
+        if not CustomUser.objects.filter(email='dhajarison@gmail.com').exists():
             user = CustomUser.objects.create_user(
-                email='technicien.test@entreprise.com',
+                email='dhajarison@gmail.com',
                 password='test123',
                 first_name='Technicien',
                 last_name='Test',

@@ -9,6 +9,8 @@ from rest_framework.permissions import IsAuthenticated, BasePermission
 from django.db.models import Q, Count, F, Avg
 from django.db.models.functions import ExtractMonth, ExtractYear, ExtractDay, TruncDate
 from django.utils import timezone
+
+from .email_utils import envoyer_email_nouveau_ticket_smtp, envoyer_email_confirmation_employe_smtp
 from .models import Ticket, Categorie, Equipement, Departement, SessionDiagnostic, TemplateDiagnostic, \
     DiagnosticSysteme, HistoriqueDiagnostic, QuestionDiagnostic, Commentaire, ReponseDiagnostic, CustomUser
 from .serializers import (
@@ -118,7 +120,19 @@ class TicketCreateView(generics.CreateAPIView):
             from rest_framework.exceptions import PermissionDenied
             raise PermissionDenied("Seuls les employés peuvent créer des tickets.")
 
-        serializer.save(utilisateur_createur=self.request.user)
+        # Créer le ticket
+        ticket = serializer.save(utilisateur_createur=self.request.user)
+
+        try:
+            # Envoyer les notifications
+            envoyer_email_nouveau_ticket_smtp(ticket)
+            envoyer_email_confirmation_employe_smtp(ticket)
+
+        except Exception as e:
+            # Log l'erreur, mais ne pas empêcher la création du ticket
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Erreur lors de l'envoi des notifications par email: {str(e)}")
 
 
 class MyTicketsView(generics.ListAPIView):

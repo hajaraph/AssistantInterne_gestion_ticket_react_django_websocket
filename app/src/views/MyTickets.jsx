@@ -131,7 +131,7 @@ const MyTickets = () => {
     setSelectedTicket(ticket);
     setIsModalOpen(true);
   };
-  // Gérer le clic sur "Nouveau problème" - maintenant avec choix diagnostic/ticket
+  // Gérer le clic sur "Nouveau problème". Maintenant avec choix diagnostic/ticket
   const handleNewProblem = () => {
     setIsDiagnosticOrTicketModalOpen(true);
   };
@@ -150,20 +150,38 @@ const MyTickets = () => {
   };
 
   // Gérer la fin du diagnostic
-  const handleDiagnosticComplete = (result) => {
+  const handleDiagnosticComplete = async (result) => {
     setIsDiagnosticEtapesOpen(false);
 
     // Selon la décision finale de l'utilisateur
     if (result?.resultat_etape?.decision === 'creer_ticket_auto') {
-      // Créer automatiquement un ticket avec les informations du diagnostic
-      createTicketFromDiagnostic(result);
+      try {
+        // Vérifier que session_id existe
+        if (!result.session_id) {
+          console.error('Session ID manquant dans le résultat du diagnostic');
+          setIsNewTicketModalOpen(true);
+          return;
+        }
+
+        // Créer directement le ticket avec les informations du diagnostic
+        await apiService.post(`/diagnostic/session/${result.session_id}/create-ticket`, {});
+        // Recharger la liste des tickets
+        await loadTickets(true);
+        // Afficher un message de succès
+        alert('Ticket créé avec succès !');
+      } catch (error) {
+        console.error('Erreur lors de la création automatique du ticket:', error);
+        // En cas d'erreur, ouvrir le modal de création manuelle
+        alert('Une erreur est survenue lors de la création automatique du ticket. Vous allez être redirigé vers le formulaire de création manuelle.');
+        setIsNewTicketModalOpen(true);
+      }
     } else if (result?.resultat_etape?.decision === 'creer_ticket_manuel') {
       // Ouvrir le modal de création manuelle
       setIsNewTicketModalOpen(true);
     } else if (result?.resultat_etape?.decision === 'probleme_resolu') {
       // Afficher un message de succès
       alert('Parfait ! Votre problème a été résolu grâce au diagnostic automatique.');
-      // Optionnel : recharger les tickets pour voir les éventuels tickets automatiques
+      // Recharger les tickets pour voir les éventuels tickets automatiques
       loadTickets(true);
     }
   };
@@ -171,10 +189,15 @@ const MyTickets = () => {
   // Créer un ticket automatiquement à partir du diagnostic
   const createTicketFromDiagnostic = async (diagnosticResult) => {
     try {
-      // Cette fonction utilise l'API existante pour créer un ticket depuis un diagnostic
-      const response = await apiService.post(`/diagnostic/session/${diagnosticResult.session_id}/create-ticket`);
+      if (!diagnosticResult || !diagnosticResult.session_id) {
+        console.error('Session ID manquant pour la création du ticket');
+        setIsNewTicketModalOpen(true);
+        return;
+      }
 
-      if (response.data.ticket_id) {
+      const response = await apiService.createTicketFromDiagnostic(diagnosticResult.session_id);
+
+      if (response && response.ticket_id) {
         // Recharger les tickets pour inclure le nouveau
         loadTickets(true);
         alert('Ticket créé automatiquement avec les informations du diagnostic !');
